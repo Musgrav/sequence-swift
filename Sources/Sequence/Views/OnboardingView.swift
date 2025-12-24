@@ -80,50 +80,64 @@ struct ScreenView: View {
     let onButtonTap: (ButtonAction) -> Void
     let onSkip: () -> Void
     
+    // Check if blocks use absolute positioning
+    private var hasAbsolutePositioning: Bool {
+        screen.content.useBlocks == true && 
+        screen.content.blocks?.contains { $0.position != nil } == true
+    }
+    
     var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                // Background
-                backgroundView
-                
-                // Content
-                VStack(spacing: 0) {
-                    // Progress indicator
-                    if totalScreens > 1 {
-                        ProgressDots(total: totalScreens, current: currentIndex)
-                            .padding(.top, 60)
-                            .padding(.bottom, 20)
-                    } else {
-                        Spacer().frame(height: 80)
-                    }
-                    
-                    Spacer()
-                    
-                    // Main content
-                    if screen.content.useBlocks == true, let blocks = screen.content.blocks {
-                        BlocksContentView(blocks: blocks, onButtonTap: onButtonTap)
-                    } else {
-                        SimpleContentView(content: screen.content, onButtonTap: onButtonTap)
-                    }
-                    
-                    Spacer()
-                    
-                    // Skip button if available
-                    if let skipText = screen.content.skipText {
-                        Button(action: onSkip) {
-                            Text(skipText)
-                                .font(.subheadline)
-                                .foregroundColor(.white.opacity(0.6))
+        ZStack {
+            // Background - extends to screen edges
+            backgroundView
+                .ignoresSafeArea()
+            
+            // Content - respects safe area for absolute positioning
+            GeometryReader { geometry in
+                if hasAbsolutePositioning, let blocks = screen.content.blocks {
+                    // Absolute positioning mode - BlocksContentView takes full safe area
+                    // This matches the editor's canvas behavior exactly
+                    BlocksContentView(blocks: blocks, onButtonTap: onButtonTap)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                } else {
+                    // Standard VStack layout
+                    VStack(spacing: 0) {
+                        // Progress indicator
+                        if totalScreens > 1 {
+                            ProgressDots(total: totalScreens, current: currentIndex)
+                                .padding(.top, 20)
+                                .padding(.bottom, 20)
+                        } else {
+                            Spacer().frame(height: 40)
                         }
-                        .padding(.bottom, 40)
-                    } else {
-                        Spacer().frame(height: 40)
+                        
+                        Spacer()
+                        
+                        // Main content
+                        if screen.content.useBlocks == true, let blocks = screen.content.blocks {
+                            BlocksContentView(blocks: blocks, onButtonTap: onButtonTap)
+                        } else {
+                            SimpleContentView(content: screen.content, onButtonTap: onButtonTap)
+                        }
+                        
+                        Spacer()
+                        
+                        // Skip button if available
+                        if let skipText = screen.content.skipText {
+                            Button(action: onSkip) {
+                                Text(skipText)
+                                    .font(.subheadline)
+                                    .foregroundColor(.white.opacity(0.6))
+                            }
+                            .padding(.bottom, 20)
+                        } else {
+                            Spacer().frame(height: 20)
+                        }
                     }
+                    .padding(.horizontal, 24)
                 }
-                .padding(.horizontal, 24)
             }
         }
-        .ignoresSafeArea()
         .onAppear {
             Sequence.shared.trackScreenViewed(screenId: screen.id, screenName: screen.name)
         }
@@ -210,6 +224,10 @@ struct BlocksContentView: View {
     let blocks: [ContentBlock]
     let onButtonTap: (ButtonAction) -> Void
     
+    // Editor canvas dimensions (must match web/src/components/editor/EditableScreen.tsx)
+    private let editorCanvasWidth: CGFloat = 320
+    private let editorCanvasHeight: CGFloat = 693
+    
     // Check if any block has absolute positioning
     private var hasAbsolutePositioning: Bool {
         blocks.contains { $0.position != nil }
@@ -220,18 +238,35 @@ struct BlocksContentView: View {
             // Use absolute positioning (ZStack) for free-form layouts
             // This matches the editor's canvas exactly
             GeometryReader { geometry in
+                let scaleX = geometry.size.width / editorCanvasWidth
+                let scaleY = geometry.size.height / editorCanvasHeight
+                // Minimum horizontal margin to prevent content from touching screen edges
+                let minHorizontalMargin: CGFloat = 16
+                
+                let _ = print("🔧 [Sequence SDK] Screen geometry: \(geometry.size.width) x \(geometry.size.height)")
+                let _ = print("🔧 [Sequence SDK] Scale factors: scaleX=\(scaleX), scaleY=\(scaleY)")
+                
                 ZStack(alignment: .topLeading) {
                     ForEach(blocks.sorted(by: { $0.order < $1.order })) { block in
                         if let position = block.position {
-                            // Scale positions from editor canvas (290x628) to device screen
-                            let scaleX = geometry.size.width / 290
-                            let scaleY = geometry.size.height / 628
+                            // Scale positions from editor canvas to device screen
+                            // Ensure minimum left margin to prevent edge clipping
+                            let rawScaledX = position.x * scaleX
+                            let scaledX = max(minHorizontalMargin, rawScaledX)
                             
-                            BlockView(block: block, onButtonTap: onButtonTap)
-                                .position(x: position.x * scaleX + blockWidth(for: block) * scaleX / 2,
-                                         y: position.y * scaleY + 20)
+                            // Calculate available width from block position to right edge
+                            // In the editor, blocks are ~280px max width within 320px canvas
+                            let availableWidth = geometry.size.width - scaledX - minHorizontalMargin
+                            let blockWidth = min(max(availableWidth, 100), 280 * scaleX) // Clamp between 100 and scaled max
+                            
+                            let _ = print("🔧 [Sequence SDK] Block '\(block.type)' id=\(block.id): editor pos=(\(position.x), \(position.y)) → scaled pos=(\(scaledX), \(position.y * scaleY)), width=\(blockWidth)")
+                            
+                            BlockView(block: block, onButtonTap: onButtonTap, maxWidth: blockWidth)
+                                .frame(width: blockWidth, alignment: .leading)
+                                .offset(x: scaledX, y: position.y * scaleY)
                         } else {
-                            BlockView(block: block, onButtonTap: onButtonTap)
+                            let _ = print("🔧 [Sequence SDK] Block '\(block.type)' id=\(block.id): NO POSITION (using VStack fallback)")
+                            BlockView(block: block, onButtonTap: onButtonTap, maxWidth: nil)
                         }
                     }
                 }
@@ -240,23 +275,9 @@ struct BlocksContentView: View {
             // Fallback to VStack layout for legacy content
             VStack(spacing: 16) {
                 ForEach(blocks.sorted(by: { $0.order < $1.order })) { block in
-                    BlockView(block: block, onButtonTap: onButtonTap)
+                    BlockView(block: block, onButtonTap: onButtonTap, maxWidth: nil)
                 }
             }
-        }
-    }
-    
-    // Estimate block width for centering
-    private func blockWidth(for block: ContentBlock) -> CGFloat {
-        switch block.type {
-        case .button:
-            return block.content.fullWidth == true ? 280 : 120
-        case .text:
-            return 200
-        case .checklist:
-            return 280
-        default:
-            return 100
         }
     }
 }
@@ -264,29 +285,30 @@ struct BlocksContentView: View {
 struct BlockView: View {
     let block: ContentBlock
     let onButtonTap: (ButtonAction) -> Void
+    var maxWidth: CGFloat?
     
     var body: some View {
         switch block.type {
         case .text:
-            TextBlockView(content: block.content)
+            TextBlockView(content: block.content, maxWidth: maxWidth)
         case .icon:
             IconBlockView(content: block.content)
         case .button:
-            ButtonBlockView(content: block.content, onTap: onButtonTap)
+            ButtonBlockView(content: block.content, onTap: onButtonTap, maxWidth: maxWidth)
         case .spacer:
             SpacerBlockView(content: block.content)
         case .image:
-            ImageBlockView(content: block.content)
+            ImageBlockView(content: block.content, maxWidth: maxWidth)
         case .divider:
-            DividerBlockView(content: block.content)
+            DividerBlockView(content: block.content, maxWidth: maxWidth)
         case .input:
-            InputBlockView(content: block.content)
+            InputBlockView(content: block.content, maxWidth: maxWidth)
         case .checklist:
-            ChecklistBlockView(content: block.content)
+            ChecklistBlockView(content: block.content, onButtonTap: onButtonTap, maxWidth: maxWidth)
         case .video:
-            VideoBlockView(content: block.content)
+            VideoBlockView(content: block.content, maxWidth: maxWidth)
         case .progress:
-            ProgressBlockView(content: block.content)
+            ProgressBlockView(content: block.content, maxWidth: maxWidth)
         case .lottie, .custom, .unknown:
             // Custom/unknown blocks require native implementation
             EmptyView()
@@ -296,6 +318,7 @@ struct BlockView: View {
 
 struct TextBlockView: View {
     let content: BlockContent
+    var maxWidth: CGFloat?
     
     var body: some View {
         Text(content.text ?? "")
@@ -303,7 +326,9 @@ struct TextBlockView: View {
             .fontWeight(weightForString(content.fontWeight))
             .foregroundColor(Color(hex: content.color ?? "#ffffff"))
             .multilineTextAlignment(alignmentForString(content.align))
-            .frame(maxWidth: .infinity, alignment: frameAlignmentForString(content.align))
+            .lineLimit(nil)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: maxWidth ?? .infinity, alignment: frameAlignmentForString(content.align))
     }
     
     private func fontForVariant(_ variant: String?) -> Font {
@@ -366,6 +391,7 @@ struct IconBlockView: View {
 struct ButtonBlockView: View {
     let content: BlockContent
     let onTap: (ButtonAction) -> Void
+    var maxWidth: CGFloat?
     
     private var isAuthButton: Bool {
         content.preset?.hasPrefix("sign-in-") == true
@@ -530,6 +556,7 @@ struct SpacerBlockView: View {
 
 struct ImageBlockView: View {
     let content: BlockContent
+    var maxWidth: CGFloat?
     
     var body: some View {
         if let src = content.src, let url = URL(string: src) {
@@ -540,7 +567,7 @@ struct ImageBlockView: View {
             } placeholder: {
                 ProgressView()
             }
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: maxWidth ?? .infinity)
             .cornerRadius(CGFloat(content.borderRadius ?? 0))
         }
     }
@@ -548,17 +575,19 @@ struct ImageBlockView: View {
 
 struct DividerBlockView: View {
     let content: BlockContent
+    var maxWidth: CGFloat?
     
     var body: some View {
         Rectangle()
             .fill(Color(hex: content.color ?? "#333333"))
             .frame(height: CGFloat(content.thickness ?? 1))
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: maxWidth ?? .infinity)
     }
 }
 
 struct InputBlockView: View {
     let content: BlockContent
+    var maxWidth: CGFloat?
     @State private var text: String = ""
     
     var body: some View {
@@ -584,12 +613,14 @@ struct InputBlockView: View {
                         .stroke(Color.white.opacity(0.2), lineWidth: 1)
                 )
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: maxWidth ?? .infinity, alignment: .leading)
     }
 }
 
 struct ChecklistBlockView: View {
     let content: BlockContent
+    let onButtonTap: (ButtonAction) -> Void
+    var maxWidth: CGFloat?
     @State private var selectedItems: Set<String> = []
     
     private var activeColor: Color {
@@ -632,7 +663,7 @@ struct ChecklistBlockView: View {
                 listLayout
             }
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: maxWidth ?? .infinity)
     }
     
     // MARK: - List Style (default)
@@ -746,6 +777,17 @@ struct ChecklistBlockView: View {
         } else {
             // Single selection
             selectedItems = [item.id]
+            
+            // Auto-advance on single selection - default to true if not explicitly set to false
+            // This is the expected UX: select an option and automatically proceed
+            let shouldAutoAdvance = content.autoAdvance ?? true
+            if shouldAutoAdvance {
+                // Trigger the action after a brief delay for visual feedback
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    let action = content.action ?? .next
+                    onButtonTap(action)
+                }
+            }
         }
     }
 }
@@ -931,6 +973,7 @@ struct ChecklistCardView: View {
 
 struct VideoBlockView: View {
     let content: BlockContent
+    var maxWidth: CGFloat?
     
     var body: some View {
         if let src = content.src, URL(string: src) != nil {
@@ -960,7 +1003,7 @@ struct VideoBlockView: View {
                     .foregroundColor(Color(hex: "#0f172a"))
                     .offset(x: 2)
             }
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: maxWidth ?? .infinity)
             .frame(height: 200)
             .cornerRadius(CGFloat(content.borderRadius ?? 12))
             .clipped()
@@ -970,6 +1013,7 @@ struct VideoBlockView: View {
 
 struct ProgressBlockView: View {
     let content: BlockContent
+    var maxWidth: CGFloat?
     
     var body: some View {
         // Simple progress bar placeholder
@@ -986,7 +1030,7 @@ struct ProgressBlockView: View {
             }
         }
         .frame(height: 8)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: maxWidth ?? .infinity)
     }
 }
 

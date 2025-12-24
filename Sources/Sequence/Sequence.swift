@@ -157,6 +157,12 @@ public final class Sequence: ObservableObject {
                 throw SequenceError.networkError("HTTP \(httpResponse.statusCode)")
             }
             
+            // Debug: Print raw JSON response
+            if let jsonString = String(data: data, encoding: .utf8) {
+                print("🔧 [Sequence SDK] Raw API response (first 2000 chars):")
+                print(String(jsonString.prefix(2000)))
+            }
+            
             let decoder = JSONDecoder()
             // Note: Don't use .convertFromSnakeCase as the API returns camelCase for nested content
             // The top-level fields match Swift property names already
@@ -167,7 +173,31 @@ public final class Sequence: ObservableObject {
                 self.error = nil
             }
             
-            print("[Sequence] Fetched config with \(config.screens.count) screens")
+            // Debug logging for block positions
+            print("🔧 [Sequence SDK] ====== CONFIG DEBUG ======")
+            print("🔧 [Sequence SDK] Fetched config with \(config.screens.count) screens")
+            for (screenIndex, screen) in config.screens.enumerated() {
+                print("🔧 [Sequence SDK] Screen \(screenIndex): '\(screen.name)' (id: \(screen.id))")
+                print("🔧 [Sequence SDK]   useBlocks: \(screen.content.useBlocks ?? false)")
+                if let blocks = screen.content.blocks {
+                    print("🔧 [Sequence SDK]   blocks count: \(blocks.count)")
+                    for block in blocks {
+                        if let pos = block.position {
+                            print("🔧 [Sequence SDK]     - \(block.type) (id: \(block.id)): position=(\(pos.x), \(pos.y))")
+                        } else {
+                            print("🔧 [Sequence SDK]     - \(block.type) (id: \(block.id)): NO POSITION")
+                        }
+                        // For text blocks, print the content
+                        if block.type == .text {
+                            print("🔧 [Sequence SDK]       text: '\(block.content.text ?? "nil")'")
+                        }
+                    }
+                } else {
+                    print("🔧 [Sequence SDK]   blocks: nil")
+                }
+            }
+            print("🔧 [Sequence SDK] ====== END CONFIG DEBUG ======")
+            
             return config
             
         } catch let error as SequenceError {
