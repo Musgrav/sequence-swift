@@ -231,7 +231,15 @@ public enum ContentBlockType: String, Codable, Sendable {
     case divider
     case input
     case checklist
+    case progress
     case custom
+    case unknown
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        self = ContentBlockType(rawValue: rawValue) ?? .unknown
+    }
 }
 
 public struct BlockAnimation: Codable, Sendable {
@@ -254,14 +262,14 @@ public struct BlockAnimation: Codable, Sendable {
 // MARK: - Block Content (Union Type)
 
 public struct BlockContent: Codable, Sendable {
-    // Text
+    // Text & Button (shared: variant is used by both)
     public var text: String?
     public var variant: String?
     public var color: String?
     public var align: String?
     public var fontWeight: String?
     
-    // Image
+    // Image & Spacer (shared: height is used by both)
     public var src: String?
     public var alt: String?
     public var width: DimensionValue?
@@ -282,13 +290,9 @@ public struct BlockContent: Codable, Sendable {
     
     // Button
     public var action: ButtonAction?
-    public var buttonVariant: String?
     public var fullWidth: Bool?
     public var backgroundColor: String?
     public var textColor: String?
-    
-    // Spacer
-    public var spacerHeight: Int?
     
     // Divider
     public var thickness: Int?
@@ -308,21 +312,6 @@ public struct BlockContent: Codable, Sendable {
     // Custom
     public var identifier: String?
     public var props: [String: AnyCodable]?
-    
-    enum CodingKeys: String, CodingKey {
-        case text, variant, color, align, fontWeight
-        case src, alt, width, height, borderRadius, objectFit
-        case poster, autoplay, loop, muted, controls
-        case icon, size
-        case action
-        case buttonVariant = "variant"
-        case fullWidth, backgroundColor, textColor
-        case spacerHeight = "height"
-        case thickness, style
-        case placeholder, label, inputType, required, fieldName
-        case items, allowMultiple
-        case identifier, props
-    }
 }
 
 public struct ChecklistItem: Codable, Identifiable, Sendable {

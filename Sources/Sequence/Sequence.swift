@@ -158,7 +158,8 @@ public final class Sequence: ObservableObject {
             }
             
             let decoder = JSONDecoder()
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            // Note: Don't use .convertFromSnakeCase as the API returns camelCase for nested content
+            // The top-level fields match Swift property names already
             let config = try decoder.decode(OnboardingConfig.self, from: data)
             
             await MainActor.run {

@@ -44,7 +44,7 @@ public struct OnboardingView: View {
         .task {
             await viewModel.fetchConfig()
         }
-        .onChange(of: viewModel.isCompleted) { _, completed in
+        .onChange(of: viewModel.isCompleted) { completed in
             if completed {
                 onComplete()
             }
@@ -237,7 +237,16 @@ struct BlockView: View {
             ImageBlockView(content: block.content)
         case .divider:
             DividerBlockView(content: block.content)
-        default:
+        case .input:
+            InputBlockView(content: block.content)
+        case .checklist:
+            ChecklistBlockView(content: block.content)
+        case .video:
+            VideoBlockView(content: block.content)
+        case .progress:
+            ProgressBlockView(content: block.content)
+        case .lottie, .custom, .unknown:
+            // Custom/unknown blocks require native implementation
             EmptyView()
         }
     }
@@ -337,7 +346,17 @@ struct SpacerBlockView: View {
     let content: BlockContent
     
     var body: some View {
-        Spacer().frame(height: CGFloat(content.spacerHeight ?? 16))
+        let spacerHeight: CGFloat = {
+            switch content.height {
+            case .number(let value):
+                return CGFloat(value)
+            case .string(let str):
+                return CGFloat(Int(str) ?? 16)
+            case .none:
+                return 16
+            }
+        }()
+        Spacer().frame(height: spacerHeight)
     }
 }
 
@@ -367,6 +386,198 @@ struct DividerBlockView: View {
             .fill(Color(hex: content.color ?? "#333333"))
             .frame(height: CGFloat(content.thickness ?? 1))
             .frame(maxWidth: .infinity)
+    }
+}
+
+struct InputBlockView: View {
+    let content: BlockContent
+    @State private var text: String = ""
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Label
+            if let label = content.label {
+                Text(label)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(Color(hex: content.color ?? "#ffffff"))
+            }
+            
+            // Text field
+            TextField(content.placeholder ?? "", text: $text)
+                .textFieldStyle(PlainTextFieldStyle())
+                .font(.system(size: 16))
+                .foregroundColor(Color(hex: content.textColor ?? "#ffffff"))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .background(Color(hex: content.backgroundColor ?? "#1e293b"))
+                .cornerRadius(CGFloat(content.borderRadius ?? 12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: CGFloat(content.borderRadius ?? 12))
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct ChecklistBlockView: View {
+    let content: BlockContent
+    @State private var selectedItems: Set<String> = []
+    
+    var body: some View {
+        VStack(spacing: 12) {
+            if let items = content.items {
+                ForEach(items) { item in
+                    ChecklistItemView(
+                        item: item,
+                        isSelected: selectedItems.contains(item.id),
+                        allowMultiple: content.allowMultiple ?? true,
+                        onToggle: {
+                            toggleItem(item)
+                        }
+                    )
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+    
+    private func toggleItem(_ item: ChecklistItem) {
+        if content.allowMultiple == true || content.allowMultiple == nil {
+            // Multiple selection allowed
+            if selectedItems.contains(item.id) {
+                selectedItems.remove(item.id)
+            } else {
+                selectedItems.insert(item.id)
+            }
+        } else {
+            // Single selection only
+            selectedItems = [item.id]
+        }
+    }
+}
+
+struct ChecklistItemView: View {
+    let item: ChecklistItem
+    let isSelected: Bool
+    let allowMultiple: Bool
+    let onToggle: () -> Void
+    
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 14) {
+                // Checkbox/Radio indicator
+                ZStack {
+                    if allowMultiple {
+                        // Checkbox style
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(isSelected ? Color(hex: "#10b981") : Color.white.opacity(0.4), lineWidth: 2)
+                            .frame(width: 24, height: 24)
+                        
+                        if isSelected {
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color(hex: "#10b981"))
+                                .frame(width: 24, height: 24)
+                            
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(.white)
+                        }
+                    } else {
+                        // Radio style
+                        Circle()
+                            .stroke(isSelected ? Color(hex: "#10b981") : Color.white.opacity(0.4), lineWidth: 2)
+                            .frame(width: 24, height: 24)
+                        
+                        if isSelected {
+                            Circle()
+                                .fill(Color(hex: "#10b981"))
+                                .frame(width: 14, height: 14)
+                        }
+                    }
+                }
+                
+                // Label
+                Text(item.label)
+                    .font(.system(size: 16))
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.leading)
+                
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(isSelected ? Color(hex: "#10b981").opacity(0.15) : Color.white.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(isSelected ? Color(hex: "#10b981") : Color.white.opacity(0.1), lineWidth: 1)
+            )
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+}
+
+struct VideoBlockView: View {
+    let content: BlockContent
+    
+    var body: some View {
+        if let src = content.src, URL(string: src) != nil {
+            // Video player placeholder with poster image
+            ZStack {
+                if let poster = content.poster, let posterUrl = URL(string: poster) {
+                    AsyncImage(url: posterUrl) { image in
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        Rectangle()
+                            .fill(Color(hex: "#1e293b"))
+                    }
+                } else {
+                    Rectangle()
+                        .fill(Color(hex: "#1e293b"))
+                }
+                
+                // Play button overlay
+                Circle()
+                    .fill(Color.white.opacity(0.9))
+                    .frame(width: 60, height: 60)
+                
+                Image(systemName: "play.fill")
+                    .font(.system(size: 24))
+                    .foregroundColor(Color(hex: "#0f172a"))
+                    .offset(x: 2)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 200)
+            .cornerRadius(CGFloat(content.borderRadius ?? 12))
+            .clipped()
+        }
+    }
+}
+
+struct ProgressBlockView: View {
+    let content: BlockContent
+    
+    var body: some View {
+        // Simple progress bar placeholder
+        // The actual progress would be controlled by the parent view
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.white.opacity(0.2))
+                    .frame(height: 8)
+                
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color(hex: content.color ?? "#10b981"))
+                    .frame(width: geometry.size.width * 0.5, height: 8)
+            }
+        }
+        .frame(height: 8)
+        .frame(maxWidth: .infinity)
     }
 }
 
