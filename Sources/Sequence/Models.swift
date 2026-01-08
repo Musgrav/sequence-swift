@@ -9,18 +9,40 @@ public struct OnboardingConfig: Codable, Sendable {
     public let version: Int
     public let screens: [Screen]
     public let experiment: ExperimentInfo?
+    public let progressIndicator: FlowProgressIndicator?
     
-    public init(version: Int, screens: [Screen], experiment: ExperimentInfo? = nil) {
+    public init(version: Int, screens: [Screen], experiment: ExperimentInfo? = nil, progressIndicator: FlowProgressIndicator? = nil) {
         self.version = version
         self.screens = screens
         self.experiment = experiment
+        self.progressIndicator = progressIndicator
     }
 }
 
-public struct ExperimentInfo: Codable, Sendable {
-    public let id: String
-    public let variant: String
+// Flow-level progress indicator settings
+public struct FlowProgressIndicator: Codable, Sendable {
+    public let enabled: Bool
+    public let variant: ProgressVariant?
+    public let position: ProgressPosition?
+    public let fillColor: String?
+    public let trackColor: String?
+    public let animated: Bool?
+    public let startScreen: Int?   // Starting screen index (0-based, defaults to 0)
+    public let endScreen: Int?     // Ending screen index (0-based, defaults to totalScreens - 1)
+    
+    public enum ProgressVariant: String, Codable, Sendable {
+        case bar
+        case dots
+        case steps
+        case minimal
+    }
+    
+    public enum ProgressPosition: String, Codable, Sendable {
+        case top
+        case bottom
+    }
 }
+
 
 // MARK: - Screen
 
@@ -139,12 +161,15 @@ public struct ScreenContent: Codable, Sendable {
 
 public enum ButtonAction: Codable, Sendable {
     case next
+    case previous
     case screen(screenId: String)
     case complete
+    case custom(identifier: String)
     
     enum CodingKeys: String, CodingKey {
         case type
         case screenId
+        case identifier
     }
     
     public init(from decoder: Decoder) throws {
@@ -154,11 +179,16 @@ public enum ButtonAction: Codable, Sendable {
         switch type {
         case "next":
             self = .next
+        case "previous":
+            self = .previous
         case "screen":
             let screenId = try container.decode(String.self, forKey: .screenId)
             self = .screen(screenId: screenId)
         case "complete":
             self = .complete
+        case "custom":
+            let identifier = try container.decode(String.self, forKey: .identifier)
+            self = .custom(identifier: identifier)
         default:
             self = .next
         }
@@ -169,11 +199,16 @@ public enum ButtonAction: Codable, Sendable {
         switch self {
         case .next:
             try container.encode("next", forKey: .type)
+        case .previous:
+            try container.encode("previous", forKey: .type)
         case .screen(let screenId):
             try container.encode("screen", forKey: .type)
             try container.encode(screenId, forKey: .screenId)
         case .complete:
             try container.encode("complete", forKey: .type)
+        case .custom(let identifier):
+            try container.encode("custom", forKey: .type)
+            try container.encode(identifier, forKey: .identifier)
         }
     }
 }
@@ -212,6 +247,10 @@ public struct ContentBlock: Codable, Identifiable, Sendable {
     public var position: BlockPosition?  // Absolute positioning for free-form layout
     public var styling: BlockStyling?    // Additional styling options
     
+    enum CodingKeys: String, CodingKey {
+        case id, type, order, visible, animation, content, position, styling
+    }
+    
     public init(id: String, type: ContentBlockType, order: Int, visible: Bool? = nil, animation: BlockAnimation? = nil, content: BlockContent, position: BlockPosition? = nil, styling: BlockStyling? = nil) {
         self.id = id
         self.type = type
@@ -222,6 +261,25 @@ public struct ContentBlock: Codable, Identifiable, Sendable {
         self.position = position
         self.styling = styling
     }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        type = try container.decode(ContentBlockType.self, forKey: .type)
+        order = try container.decode(Int.self, forKey: .order)
+        visible = try container.decodeIfPresent(Bool.self, forKey: .visible)
+        animation = try container.decodeIfPresent(BlockAnimation.self, forKey: .animation)
+        content = try container.decode(BlockContent.self, forKey: .content)
+        position = try container.decodeIfPresent(BlockPosition.self, forKey: .position)
+        styling = try container.decodeIfPresent(BlockStyling.self, forKey: .styling)
+        
+        // Debug logging for position decoding
+        if let pos = position {
+            print("🔧 [Sequence SDK] Decoded block '\(type)' position: (\(pos.x), \(pos.y))")
+        } else {
+            print("🔧 [Sequence SDK] Decoded block '\(type)' - NO POSITION")
+        }
+    }
 }
 
 // MARK: - Block Position (for absolute positioning)
@@ -230,9 +288,36 @@ public struct BlockPosition: Codable, Sendable {
     public let x: CGFloat
     public let y: CGFloat
     
+    enum CodingKeys: String, CodingKey {
+        case x, y
+    }
+    
     public init(x: CGFloat, y: CGFloat) {
         self.x = x
         self.y = y
+    }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        // Handle both Int and Double from JSON
+        if let intX = try? container.decode(Int.self, forKey: .x) {
+            x = CGFloat(intX)
+        } else {
+            x = CGFloat(try container.decode(Double.self, forKey: .x))
+        }
+        
+        if let intY = try? container.decode(Int.self, forKey: .y) {
+            y = CGFloat(intY)
+        } else {
+            y = CGFloat(try container.decode(Double.self, forKey: .y))
+        }
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(Double(x), forKey: .x)
+        try container.encode(Double(y), forKey: .y)
     }
 }
 
@@ -306,6 +391,11 @@ public struct BlockContent: Codable, Sendable {
     public var color: String?
     public var align: String?
     public var fontWeight: String?
+    // Typography (new)
+    public var fontFamily: String?
+    public var fontSizeValue: CGFloat?  // Custom font size in pixels
+    public var lineHeight: CGFloat?
+    public var letterSpacing: CGFloat?
     
     // Image & Spacer (shared: height is used by both)
     public var src: String?
@@ -369,6 +459,7 @@ public struct BlockContent: Codable, Sendable {
     // Coding keys - 'style' is shared between divider and checklist
     enum CodingKeys: String, CodingKey {
         case text, variant, color, align, fontWeight
+        case fontFamily, fontSize, lineHeight, letterSpacing
         case src, alt, width, height, borderRadius, objectFit
         case poster, autoplay, loop, muted, controls
         case icon, size
@@ -378,7 +469,7 @@ public struct BlockContent: Codable, Sendable {
         case items, allowMultiple, minSelections, maxSelections, autoAdvance
         case checklistStyle = "style"  // 'style' JSON key used by both divider and checklist
         case columns, activeColor, inactiveColor
-        case fontSize, itemPadding, itemGap, itemBorderRadius, itemWidth
+        case itemPadding, itemGap, itemBorderRadius, itemWidth
         case identifier, props
     }
     
@@ -390,6 +481,52 @@ public struct BlockContent: Codable, Sendable {
         color = try container.decodeIfPresent(String.self, forKey: .color)
         align = try container.decodeIfPresent(String.self, forKey: .align)
         fontWeight = try container.decodeIfPresent(String.self, forKey: .fontWeight)
+        
+        // Typography properties
+        fontFamily = try container.decodeIfPresent(String.self, forKey: .fontFamily)
+        
+        // fontSize can be Int, Double, or String in JSON (handle all cases)
+        if let intSize = try? container.decodeIfPresent(Int.self, forKey: .fontSize) {
+            fontSizeValue = CGFloat(intSize)
+            fontSize = intSize
+        } else if let doubleSize = try? container.decodeIfPresent(Double.self, forKey: .fontSize) {
+            fontSizeValue = CGFloat(doubleSize)
+            fontSize = Int(doubleSize)
+        } else if let stringSize = try? container.decodeIfPresent(String.self, forKey: .fontSize),
+                  let parsed = Double(stringSize) {
+            // Handle case where fontSize is stored as a string
+            fontSizeValue = CGFloat(parsed)
+            fontSize = Int(parsed)
+        }
+        
+        // lineHeight and letterSpacing can also be Int, Double, or String
+        if let lh = try? container.decodeIfPresent(CGFloat.self, forKey: .lineHeight) {
+            lineHeight = lh
+        } else if let lhInt = try? container.decodeIfPresent(Int.self, forKey: .lineHeight) {
+            lineHeight = CGFloat(lhInt)
+        } else if let lhStr = try? container.decodeIfPresent(String.self, forKey: .lineHeight),
+                  let parsed = Double(lhStr) {
+            lineHeight = CGFloat(parsed)
+        }
+        
+        if let ls = try? container.decodeIfPresent(CGFloat.self, forKey: .letterSpacing) {
+            letterSpacing = ls
+        } else if let lsInt = try? container.decodeIfPresent(Int.self, forKey: .letterSpacing) {
+            letterSpacing = CGFloat(lsInt)
+        } else if let lsStr = try? container.decodeIfPresent(String.self, forKey: .letterSpacing),
+                  let parsed = Double(lsStr) {
+            letterSpacing = CGFloat(parsed)
+        }
+        
+        // Debug: log what we decoded for typography
+        if text != nil {
+            print("🔧 [BlockContent] Decoded text block:")
+            print("🔧 [BlockContent]   - text: '\(text?.prefix(20) ?? "nil")...'")
+            print("🔧 [BlockContent]   - fontFamily: \(fontFamily ?? "nil")")
+            print("🔧 [BlockContent]   - fontSize: \(fontSizeValue.map { "\($0)" } ?? "nil")")
+            print("🔧 [BlockContent]   - fontWeight: \(fontWeight ?? "nil")")
+            print("🔧 [BlockContent]   - variant: \(variant ?? "nil")")
+        }
         
         src = try container.decodeIfPresent(String.self, forKey: .src)
         alt = try container.decodeIfPresent(String.self, forKey: .alt)
@@ -434,7 +571,7 @@ public struct BlockContent: Codable, Sendable {
         columns = try container.decodeIfPresent(Int.self, forKey: .columns)
         activeColor = try container.decodeIfPresent(String.self, forKey: .activeColor)
         inactiveColor = try container.decodeIfPresent(String.self, forKey: .inactiveColor)
-        fontSize = try container.decodeIfPresent(Int.self, forKey: .fontSize)
+        // fontSize already decoded above for typography
         itemPadding = try container.decodeIfPresent(Int.self, forKey: .itemPadding)
         itemGap = try container.decodeIfPresent(Int.self, forKey: .itemGap)
         itemBorderRadius = try container.decodeIfPresent(Int.self, forKey: .itemBorderRadius)
@@ -452,6 +589,12 @@ public struct BlockContent: Codable, Sendable {
         try container.encodeIfPresent(color, forKey: .color)
         try container.encodeIfPresent(align, forKey: .align)
         try container.encodeIfPresent(fontWeight, forKey: .fontWeight)
+        
+        // Typography
+        try container.encodeIfPresent(fontFamily, forKey: .fontFamily)
+        try container.encodeIfPresent(fontSize, forKey: .fontSize)
+        try container.encodeIfPresent(lineHeight, forKey: .lineHeight)
+        try container.encodeIfPresent(letterSpacing, forKey: .letterSpacing)
         
         try container.encodeIfPresent(src, forKey: .src)
         try container.encodeIfPresent(alt, forKey: .alt)
@@ -588,12 +731,15 @@ public struct AnyCodable: Codable, Sendable {
 // MARK: - Events
 
 public enum EventType: String, Sendable {
-    case screenViewed = "screen_viewed"
-    case screenCompleted = "screen_completed"
-    case screenSkipped = "screen_skipped"
-    case buttonTapped = "button_tapped"
-    case onboardingStarted = "onboarding_started"
-    case onboardingCompleted = "onboarding_completed"
+    case screenViewed = "screen_viewed"              // All screen views (for debugging/analytics)
+    case screenFirstViewed = "screen_first_viewed"    // First time user views a screen (one per user per screen)
+    case screenCompleted = "screen_completed"          // User moves past a screen
+    case screenSkipped = "screen_skipped"              // User skips a screen
+    case screenDroppedOff = "screen_dropped_off"      // User exits onboarding without completing (at this screen)
+    case buttonTapped = "button_tapped"               // Button interaction
+    case onboardingStarted = "onboarding_started"       // User starts onboarding flow
+    case onboardingCompleted = "onboarding_completed"  // User completes entire flow
+    case experimentVariantAssigned = "experiment_variant_assigned" // User assigned to A/B test variant
 }
 
 public struct OnboardingEvent: Codable, Sendable {
@@ -603,18 +749,25 @@ public struct OnboardingEvent: Codable, Sendable {
     public let deviceId: String
     public let timestamp: String
     public let properties: [String: Any]?
+    // Experiment tracking
+    public let experimentId: String?
+    public let variantId: String?
     
     enum CodingKeys: String, CodingKey {
         case eventType, screenId, userId, deviceId, timestamp, properties
+        case experimentId = "experiment_id"
+        case variantId = "variant_id"
     }
     
-    public init(eventType: String, screenId: String?, userId: String, deviceId: String, timestamp: String, properties: [String: Any]?) {
+    public init(eventType: String, screenId: String?, userId: String, deviceId: String, timestamp: String, properties: [String: Any]?, experimentId: String? = nil, variantId: String? = nil) {
         self.eventType = eventType
         self.screenId = screenId
         self.userId = userId
         self.deviceId = deviceId
         self.timestamp = timestamp
         self.properties = properties
+        self.experimentId = experimentId
+        self.variantId = variantId
     }
     
     public init(from decoder: Decoder) throws {
@@ -625,6 +778,8 @@ public struct OnboardingEvent: Codable, Sendable {
         deviceId = try container.decode(String.self, forKey: .deviceId)
         timestamp = try container.decode(String.self, forKey: .timestamp)
         properties = nil // Properties decoded separately if needed
+        experimentId = try container.decodeIfPresent(String.self, forKey: .experimentId)
+        variantId = try container.decodeIfPresent(String.self, forKey: .variantId)
     }
     
     public func encode(to encoder: Encoder) throws {
@@ -634,6 +789,8 @@ public struct OnboardingEvent: Codable, Sendable {
         try container.encode(userId, forKey: .userId)
         try container.encode(deviceId, forKey: .deviceId)
         try container.encode(timestamp, forKey: .timestamp)
+        try container.encodeIfPresent(experimentId, forKey: .experimentId)
+        try container.encodeIfPresent(variantId, forKey: .variantId)
         
         // Encode properties as [String: AnyCodable]
         if let props = properties {

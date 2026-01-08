@@ -42,10 +42,14 @@ public final class Sequence: ObservableObject {
     private let maxBatchSize = 20
     private var cancellables = Set<AnyCancellable>()
     
+    /// Current experiment info (if user is part of an A/B test)
+    private var currentExperiment: ExperimentInfo?
+    
     // User defaults keys
     private let onboardingCompletedKey = "sequence_onboarding_completed"
     private let userIdKey = "sequence_user_id"
     private let deviceIdKey = "sequence_device_id"
+    private let firstViewedScreensKey = "sequence_first_viewed_screens" // Set of screen IDs that have been viewed
     
     // MARK: - Initialization
     
@@ -109,7 +113,20 @@ public final class Sequence: ObservableObject {
         self.isOnboardingCompleted = false
         UserDefaults.standard.set(false, forKey: onboardingCompletedKey)
         
+        // Reset first viewed screens (new user/device = fresh start)
+        UserDefaults.standard.removeObject(forKey: firstViewedScreensKey)
+        
         print("[Sequence] Reset user data")
+    }
+    
+    /// Set experiment info for event tracking (used by WebView flows)
+    /// - Parameters:
+    ///   - experimentId: The experiment ID
+    ///   - variantId: The variant ID the user is assigned to
+    ///   - variantName: The variant name for logging
+    public func setExperimentInfo(experimentId: String, variantId: String, variantName: String) {
+        self.currentExperiment = ExperimentInfo(id: experimentId, variantId: variantId, variantName: variantName)
+        print("[Sequence] 🧪 Set experiment info: '\(experimentId)' variant '\(variantName)'")
     }
     
     /// Manually mark onboarding as completed
@@ -130,21 +147,29 @@ public final class Sequence: ObservableObject {
     
     /// Fetch the onboarding configuration from the server
     /// Call this when you're ready to show onboarding
-    public func fetchConfig() async throws -> OnboardingConfig {
+    /// - Parameter session: Optional URLSession for dependency injection (used in testing)
+    public func fetchConfig(session: URLSession = .shared) async throws -> OnboardingConfig {
         guard let appId = appId, let apiKey = apiKey else {
             throw SequenceError.notConfigured
         }
-        
+
         await MainActor.run { isLoading = true }
         defer { Task { @MainActor in isLoading = false } }
-        
+
         let url = URL(string: "\(baseURL)/api/v1/config/\(appId)")!
         var request = URLRequest(url: url)
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(deviceId, forHTTPHeaderField: "x-device-id")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
+
+        // Measure fetch time
+        let startTime = CFAbsoluteTimeGetCurrent()
+
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
+            
+            let fetchTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            print("[Sequence] ⏱️ Config fetched in \(String(format: "%.0f", fetchTime))ms")
             
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw SequenceError.networkError("Invalid response")
@@ -171,7 +196,18 @@ public final class Sequence: ObservableObject {
             await MainActor.run {
                 self.config = config
                 self.error = nil
+                
+                // Store experiment info if present (for including in events)
+                if let experiment = config.experiment {
+                    self.currentExperiment = experiment
+                    print("[Sequence] 🧪 Assigned to experiment '\(experiment.id)' variant '\(experiment.variantName)'")
+                } else {
+                    self.currentExperiment = nil
+                }
             }
+            
+            // Preload fonts used in the config
+            preloadFontsFromConfig(config)
             
             // Debug logging for block positions
             print("🔧 [Sequence SDK] ====== CONFIG DEBUG ======")
@@ -187,9 +223,13 @@ public final class Sequence: ObservableObject {
                         } else {
                             print("🔧 [Sequence SDK]     - \(block.type) (id: \(block.id)): NO POSITION")
                         }
-                        // For text blocks, print the content
+                        // For text blocks, print typography info
                         if block.type == .text {
-                            print("🔧 [Sequence SDK]       text: '\(block.content.text ?? "nil")'")
+                            print("🔧 [Sequence SDK]       text: '\(block.content.text?.prefix(30) ?? "nil")...'")
+                            print("🔧 [Sequence SDK]       fontFamily: \(block.content.fontFamily ?? "nil")")
+                            print("🔧 [Sequence SDK]       fontSize: \(block.content.fontSizeValue.map { String(format: "%.0f", $0) } ?? "nil")")
+                            print("🔧 [Sequence SDK]       fontWeight: \(block.content.fontWeight ?? "nil")")
+                            print("🔧 [Sequence SDK]       variant: \(block.content.variant ?? "nil")")
                         }
                     }
                 } else {
@@ -210,6 +250,28 @@ public final class Sequence: ObservableObject {
         }
     }
     
+    /// Preload all fonts used in the config so they're ready when screens are displayed
+    private func preloadFontsFromConfig(_ config: OnboardingConfig) {
+        var fontNames: Set<String> = []
+        
+        // Collect all font families used in the config
+        for screen in config.screens {
+            if let blocks = screen.content.blocks {
+                for block in blocks {
+                    // Text blocks
+                    if let fontFamily = block.content.fontFamily, !fontFamily.isEmpty {
+                        fontNames.insert(fontFamily)
+                    }
+                }
+            }
+        }
+        
+        guard !fontNames.isEmpty else { return }
+        
+        print("🔤 [Sequence SDK] Preloading \(fontNames.count) fonts: \(fontNames.joined(separator: ", "))")
+        FontManager.shared.preloadFonts(Array(fontNames))
+    }
+    
     // MARK: - Event Tracking
     
     /// Track an onboarding event
@@ -228,11 +290,18 @@ public final class Sequence: ObservableObject {
             userId: userId ?? "anonymous",
             deviceId: deviceId,
             timestamp: ISO8601DateFormatter().string(from: Date()),
-            properties: properties
+            properties: properties,
+            experimentId: currentExperiment?.id,
+            variantId: currentExperiment?.variantId
         )
         
         eventQueue.append(event)
-        print("[Sequence] Tracked event: \(eventType.rawValue)")
+        
+        if let exp = currentExperiment {
+            print("[Sequence] Tracked event: \(eventType.rawValue) (experiment: \(exp.variantName))")
+        } else {
+            print("[Sequence] Tracked event: \(eventType.rawValue)")
+        }
         
         // Flush immediately if queue is getting large
         if eventQueue.count >= maxBatchSize {
@@ -240,13 +309,37 @@ public final class Sequence: ObservableObject {
         }
     }
     
-    /// Track when a screen is viewed
+    /// Track when a screen is viewed (all views)
     public func trackScreenViewed(screenId: String, screenName: String? = nil) {
         var props: [String: Any] = [:]
         if let name = screenName {
             props["screen_name"] = name
         }
         track(eventType: .screenViewed, screenId: screenId, properties: props.isEmpty ? nil : props)
+    }
+    
+    /// Track when a screen is viewed for the first time (one per user per screen, persistent across sessions)
+    /// Uses UserDefaults to deduplicate - only tracks once per screen per user/device ever
+    /// This gives accurate metrics: "How many unique users have seen this screen?"
+    public func trackScreenFirstViewed(screenId: String, screenName: String? = nil) {
+        // Check if we've already tracked first view for this screen (persistent across sessions)
+        var viewedScreens = Set<String>(UserDefaults.standard.stringArray(forKey: firstViewedScreensKey) ?? [])
+        
+        // If already viewed before (in any session), skip tracking
+        if viewedScreens.contains(screenId) {
+            return
+        }
+        
+        // Mark as viewed (persists across app sessions)
+        viewedScreens.insert(screenId)
+        UserDefaults.standard.set(Array(viewedScreens), forKey: firstViewedScreensKey)
+        
+        // Track the first view event
+        var props: [String: Any] = [:]
+        if let name = screenName {
+            props["screen_name"] = name
+        }
+        track(eventType: .screenFirstViewed, screenId: screenId, properties: props.isEmpty ? nil : props)
     }
     
     /// Track when a screen is completed
@@ -270,6 +363,18 @@ public final class Sequence: ObservableObject {
     /// Track when a button is tapped
     public func trackButtonTapped(screenId: String, buttonText: String) {
         track(eventType: .buttonTapped, screenId: screenId, properties: ["button_text": buttonText])
+    }
+    
+    /// Track when a user drops off (exits without completing a screen)
+    public func trackScreenDroppedOff(screenId: String, screenName: String? = nil, reason: String? = nil) {
+        var props: [String: Any] = [:]
+        if let name = screenName {
+            props["screen_name"] = name
+        }
+        if let reason = reason {
+            props["drop_off_reason"] = reason
+        }
+        track(eventType: .screenDroppedOff, screenId: screenId, properties: props.isEmpty ? nil : props)
     }
     
     // MARK: - Event Flushing
@@ -315,6 +420,57 @@ public final class Sequence: ObservableObject {
             // Re-queue events on failure
             eventQueue.insert(contentsOf: eventsToSend, at: 0)
             print("[Sequence] Error flushing events: \(error)")
+        }
+    }
+    
+    /// Force flush events immediately (used for critical events like drop-offs)
+    /// This uses a synchronous URLSession data task to ensure events are sent before app termination
+    public func forceFlush() {
+        guard !eventQueue.isEmpty else { return }
+        guard let apiKey = apiKey else { return }
+        
+        let eventsToSend = eventQueue
+        eventQueue.removeAll()
+        
+        let url = URL(string: "\(baseURL)/api/v1/events")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 5.0 // Short timeout for quick flush
+        
+        let payload = EventPayload(events: eventsToSend)
+        
+        do {
+            let encoder = JSONEncoder()
+            encoder.keyEncodingStrategy = .convertToSnakeCase
+            request.httpBody = try encoder.encode(payload)
+            
+            // Use semaphore to wait for completion (synchronous)
+            let semaphore = DispatchSemaphore(value: 0)
+            var success = false
+            
+            let task = URLSession.shared.dataTask(with: request) { _, response, error in
+                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                    success = true
+                    print("[Sequence] Force flushed \(eventsToSend.count) events")
+                } else {
+                    print("[Sequence] Failed to force flush events")
+                }
+                semaphore.signal()
+            }
+            
+            task.resume()
+            _ = semaphore.wait(timeout: .now() + 5.0) // Wait up to 5 seconds
+            
+            if !success {
+                // Re-queue on failure
+                eventQueue.insert(contentsOf: eventsToSend, at: 0)
+            }
+        } catch {
+            // Re-queue on failure
+            eventQueue.insert(contentsOf: eventsToSend, at: 0)
+            print("[Sequence] Error force flushing events: \(error)")
         }
     }
     

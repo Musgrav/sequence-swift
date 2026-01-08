@@ -18,7 +18,11 @@ let package = Package(
     targets: [
         .target(
             name: "Sequence",
-            dependencies: []),
+            dependencies: [],
+            resources: [
+                // Font resources will be bundled here
+                .copy("Resources/Fonts")
+            ]),
         .testTarget(
             name: "SequenceTests",
             dependencies: ["Sequence"]),

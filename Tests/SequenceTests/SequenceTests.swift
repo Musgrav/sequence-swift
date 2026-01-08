@@ -5,7 +5,7 @@ final class SequenceTests: XCTestCase {
     
     func testConfiguration() async throws {
         let kit = Sequence.shared
-        
+
         // Should throw if not configured
         do {
             _ = try await kit.fetchConfig()
@@ -14,13 +14,14 @@ final class SequenceTests: XCTestCase {
             XCTAssertEqual(error.localizedDescription, SequenceError.notConfigured.localizedDescription)
         }
     }
-    
-    func testUserIdentification() {
+
+    @MainActor
+    func testUserIdentification() throws {
         let kit = Sequence.shared
-        
+
         // Identify user
         kit.identify(userId: "test_user_123")
-        
+
         // Reset should clear user
         kit.reset()
     }
