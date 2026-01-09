@@ -29,11 +29,11 @@ public final class Sequence: ObservableObject {
     /// Current error if any
     @Published public private(set) var error: SequenceError?
     
-    // MARK: - Private Properties
-    
-    private var appId: String?
-    private var apiKey: String?
-    private var baseURL: String = "https://your-domain.com" // Default, override in configure
+    // MARK: - Configuration Properties (internal for WebView access)
+
+    internal private(set) var appId: String?
+    internal private(set) var apiKey: String?
+    internal private(set) var baseURL: String = "https://your-domain.com" // Default, override in configure
     private var userId: String?
     private var deviceId: String
     private var eventQueue: [OnboardingEvent] = []
@@ -166,7 +166,24 @@ public final class Sequence: ObservableObject {
             let decoder = JSONDecoder()
             // Note: Don't use .convertFromSnakeCase as the API returns camelCase for nested content
             // The top-level fields match Swift property names already
-            let config = try decoder.decode(OnboardingConfig.self, from: data)
+            let config: OnboardingConfig
+            do {
+                config = try decoder.decode(OnboardingConfig.self, from: data)
+            } catch let DecodingError.keyNotFound(key, context) {
+                print("🔴 [Sequence SDK] Decoding error - Key not found: '\(key.stringValue)' in \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+                throw SequenceError.decodingError("Key not found: \(key.stringValue)")
+            } catch let DecodingError.typeMismatch(type, context) {
+                print("🔴 [Sequence SDK] Decoding error - Type mismatch: expected \(type) at \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+                print("🔴 [Sequence SDK] Debug description: \(context.debugDescription)")
+                throw SequenceError.decodingError("Type mismatch at \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+            } catch let DecodingError.valueNotFound(type, context) {
+                print("🔴 [Sequence SDK] Decoding error - Value not found: \(type) at \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+                throw SequenceError.decodingError("Value not found at \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+            } catch let DecodingError.dataCorrupted(context) {
+                print("🔴 [Sequence SDK] Decoding error - Data corrupted at \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+                print("🔴 [Sequence SDK] Debug description: \(context.debugDescription)")
+                throw SequenceError.decodingError("Data corrupted: \(context.debugDescription)")
+            }
             
             await MainActor.run {
                 self.config = config

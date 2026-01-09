@@ -9,12 +9,28 @@ public struct OnboardingConfig: Codable, Sendable {
     public let version: Int
     public let screens: [Screen]
     public let experiment: ExperimentInfo?
-    
-    public init(version: Int, screens: [Screen], experiment: ExperimentInfo? = nil) {
+    public let progressIndicator: FlowProgressIndicator?
+
+    public init(version: Int, screens: [Screen], experiment: ExperimentInfo? = nil, progressIndicator: FlowProgressIndicator? = nil) {
         self.version = version
         self.screens = screens
         self.experiment = experiment
+        self.progressIndicator = progressIndicator
     }
+}
+
+// MARK: - Progress Indicator
+
+public struct FlowProgressIndicator: Codable, Sendable {
+    public let enabled: Bool
+    public let variant: String  // 'bar', 'dots', 'steps', 'minimal'
+    public let position: String // 'top', 'bottom'
+    public let fillColor: String?
+    public let trackColor: String?
+    public let animated: Bool?
+    public let startScreen: Int?
+    public let endScreen: Int?
+    public let skipScreens: [Int]?
 }
 
 public struct ExperimentInfo: Codable, Sendable {
@@ -47,6 +63,14 @@ public enum ScreenType: String, Codable, Sendable {
     case permission
     case celebration
     case native
+    case filler
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        self = ScreenType(rawValue: rawValue) ?? .unknown
+    }
 }
 
 // MARK: - Screen Content
@@ -209,15 +233,53 @@ public struct ContentBlock: Codable, Identifiable, Sendable {
     public var visible: Bool?
     public var animation: BlockAnimation?
     public var content: BlockContent
+    public var position: BlockPosition?  // Absolute positioning for free-form layout
+    public var styling: BlockStyling?    // Additional styling options
     
-    public init(id: String, type: ContentBlockType, order: Int, visible: Bool? = nil, animation: BlockAnimation? = nil, content: BlockContent) {
+    public init(id: String, type: ContentBlockType, order: Int, visible: Bool? = nil, animation: BlockAnimation? = nil, content: BlockContent, position: BlockPosition? = nil, styling: BlockStyling? = nil) {
         self.id = id
         self.type = type
         self.order = order
         self.visible = visible
         self.animation = animation
         self.content = content
+        self.position = position
+        self.styling = styling
     }
+}
+
+// MARK: - Block Position (for absolute positioning)
+
+public struct BlockPosition: Codable, Sendable {
+    public let x: CGFloat
+    public let y: CGFloat
+    
+    public init(x: CGFloat, y: CGFloat) {
+        self.x = x
+        self.y = y
+    }
+}
+
+// MARK: - Block Styling
+
+public struct BlockStyling: Codable, Sendable {
+    public var paddingTop: CGFloat?
+    public var paddingBottom: CGFloat?
+    public var paddingLeft: CGFloat?
+    public var paddingRight: CGFloat?
+    public var marginTop: CGFloat?
+    public var marginBottom: CGFloat?
+    public var marginLeft: CGFloat?
+    public var marginRight: CGFloat?
+    public var width: DimensionValue?
+    public var height: DimensionValue?
+    public var minWidth: CGFloat?
+    public var maxWidth: CGFloat?
+    public var borderRadius: Int?
+    public var borderWidth: CGFloat?
+    public var borderColor: String?
+    public var backgroundColor: String?
+    public var opacity: CGFloat?
 }
 
 public enum ContentBlockType: String, Codable, Sendable {
@@ -230,8 +292,12 @@ public enum ContentBlockType: String, Codable, Sendable {
     case spacer
     case divider
     case input
+    case slider
     case checklist
     case progress
+    case loadingIndicator = "loading-indicator"
+    case featureCard = "feature-card"
+    case scrollContainer = "scroll-container"
     case custom
     case unknown
     
@@ -286,13 +352,15 @@ public struct BlockContent: Codable, Sendable {
     
     // Icon
     public var icon: String?
-    public var size: String?
+    public var size: DimensionValue?  // Can be string like "md" or number like 24
     
     // Button
     public var action: ButtonAction?
     public var fullWidth: Bool?
     public var backgroundColor: String?
     public var textColor: String?
+    public var preset: String?           // Button preset: 'sign-in-apple', 'sign-in-google', 'sign-in-email', etc.
+    public var iconPosition: String?     // 'left' or 'right'
     
     // Divider
     public var thickness: Int?
@@ -300,7 +368,9 @@ public struct BlockContent: Codable, Sendable {
     
     // Input
     public var placeholder: String?
+    public var placeholderColor: String?
     public var label: String?
+    public var fieldLabel: String?
     public var inputType: String?
     public var required: Bool?
     public var fieldName: String?
@@ -308,10 +378,251 @@ public struct BlockContent: Codable, Sendable {
     // Checklist
     public var items: [ChecklistItem]?
     public var allowMultiple: Bool?
+    public var minSelections: Int?
+    public var maxSelections: Int?
+    public var autoAdvance: Bool?
+    public var checklistStyle: String?   // 'list', 'pills', 'cards'
+    public var columns: Int?             // 1 or 2
+    public var activeColor: String?      // Color when selected
+    public var inactiveColor: String?    // Color when not selected
+    // Checklist styling options
+    public var fontSize: Int?            // Font size in pixels
+    public var itemPadding: Int?         // Padding inside each item
+    public var itemGap: Int?             // Gap between items
+    public var itemBorderRadius: Int?    // Corner radius for items (uses borderRadius if not set)
+    public var itemWidth: DimensionValue? // Width of each item
     
+    // Slider
+    public var min: Int?
+    public var max: Int?
+    public var defaultValue: Int?
+    public var fillColor: String?
+    public var trackColor: String?
+    public var thumbColor: String?
+    public var thumbSize: Int?
+    public var trackHeight: Int?
+    public var showValue: Bool?
+    public var valuePrefix: String?
+    public var valueSuffix: String?
+    public var showMinMax: Bool?
+    public var showTicks: Bool?
+    public var tickCount: Int?
+    public var valueColor: String?
+    public var valueFontSize: Int?
+    public var valueFontWeight: String?
+    public var suffixFontSize: Int?
+    public var labelColor: String?
+
+    // Button padding (size comes from 'size' property, shared with icon)
+    public var paddingHorizontal: Int?
+    public var paddingVertical: Int?
+    public var fontFamily: String?
+
     // Custom
     public var identifier: String?
     public var props: [String: AnyCodable]?
+
+    // Coding keys - 'style' is shared between divider and checklist
+    enum CodingKeys: String, CodingKey {
+        case text, variant, color, align, fontWeight
+        case src, alt, width, height, borderRadius, objectFit
+        case poster, autoplay, loop, muted, controls
+        case icon, size
+        case action, fullWidth, backgroundColor, textColor, preset, iconPosition
+        case thickness
+        case placeholder, placeholderColor, label, fieldLabel, inputType, required, fieldName
+        case items, allowMultiple, minSelections, maxSelections, autoAdvance
+        case checklistStyle = "style"  // 'style' JSON key used by both divider and checklist
+        case columns, activeColor, inactiveColor
+        case fontSize, itemPadding, itemGap, itemBorderRadius, itemWidth
+        // Slider
+        case min, max, defaultValue, fillColor, trackColor, thumbColor
+        case thumbSize, trackHeight, showValue, valuePrefix, valueSuffix
+        case showMinMax, showTicks, tickCount, valueColor, valueFontSize
+        case valueFontWeight, suffixFontSize, labelColor
+        // Button - size is shared with icon, uses same 'size' key (sm/md/lg or number)
+        case paddingHorizontal, paddingVertical, fontFamily
+        case identifier, props
+    }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        text = try container.decodeIfPresent(String.self, forKey: .text)
+        variant = try container.decodeIfPresent(String.self, forKey: .variant)
+        color = try container.decodeIfPresent(String.self, forKey: .color)
+        align = try container.decodeIfPresent(String.self, forKey: .align)
+        fontWeight = try container.decodeIfPresent(String.self, forKey: .fontWeight)
+        
+        src = try container.decodeIfPresent(String.self, forKey: .src)
+        alt = try container.decodeIfPresent(String.self, forKey: .alt)
+        width = try container.decodeIfPresent(DimensionValue.self, forKey: .width)
+        height = try container.decodeIfPresent(DimensionValue.self, forKey: .height)
+        borderRadius = try container.decodeIfPresent(Int.self, forKey: .borderRadius)
+        objectFit = try container.decodeIfPresent(String.self, forKey: .objectFit)
+        
+        poster = try container.decodeIfPresent(String.self, forKey: .poster)
+        autoplay = try container.decodeIfPresent(Bool.self, forKey: .autoplay)
+        loop = try container.decodeIfPresent(Bool.self, forKey: .loop)
+        muted = try container.decodeIfPresent(Bool.self, forKey: .muted)
+        controls = try container.decodeIfPresent(Bool.self, forKey: .controls)
+        
+        icon = try container.decodeIfPresent(String.self, forKey: .icon)
+        size = try container.decodeIfPresent(DimensionValue.self, forKey: .size)
+        
+        action = try container.decodeIfPresent(ButtonAction.self, forKey: .action)
+        fullWidth = try container.decodeIfPresent(Bool.self, forKey: .fullWidth)
+        backgroundColor = try container.decodeIfPresent(String.self, forKey: .backgroundColor)
+        textColor = try container.decodeIfPresent(String.self, forKey: .textColor)
+        preset = try container.decodeIfPresent(String.self, forKey: .preset)
+        iconPosition = try container.decodeIfPresent(String.self, forKey: .iconPosition)
+        
+        thickness = try container.decodeIfPresent(Int.self, forKey: .thickness)
+        // 'style' JSON key is decoded via checklistStyle (used by both divider and checklist)
+        style = try container.decodeIfPresent(String.self, forKey: .checklistStyle)
+        
+        placeholder = try container.decodeIfPresent(String.self, forKey: .placeholder)
+        placeholderColor = try container.decodeIfPresent(String.self, forKey: .placeholderColor)
+        label = try container.decodeIfPresent(String.self, forKey: .label)
+        fieldLabel = try container.decodeIfPresent(String.self, forKey: .fieldLabel)
+        inputType = try container.decodeIfPresent(String.self, forKey: .inputType)
+        required = try container.decodeIfPresent(Bool.self, forKey: .required)
+        fieldName = try container.decodeIfPresent(String.self, forKey: .fieldName)
+        
+        items = try container.decodeIfPresent([ChecklistItem].self, forKey: .items)
+        allowMultiple = try container.decodeIfPresent(Bool.self, forKey: .allowMultiple)
+        minSelections = try container.decodeIfPresent(Int.self, forKey: .minSelections)
+        maxSelections = try container.decodeIfPresent(Int.self, forKey: .maxSelections)
+        autoAdvance = try container.decodeIfPresent(Bool.self, forKey: .autoAdvance)
+        // 'style' is used for both divider and checklist, stored in checklistStyle
+        checklistStyle = try container.decodeIfPresent(String.self, forKey: .checklistStyle)
+        columns = try container.decodeIfPresent(Int.self, forKey: .columns)
+        activeColor = try container.decodeIfPresent(String.self, forKey: .activeColor)
+        inactiveColor = try container.decodeIfPresent(String.self, forKey: .inactiveColor)
+        fontSize = try container.decodeIfPresent(Int.self, forKey: .fontSize)
+        itemPadding = try container.decodeIfPresent(Int.self, forKey: .itemPadding)
+        itemGap = try container.decodeIfPresent(Int.self, forKey: .itemGap)
+        itemBorderRadius = try container.decodeIfPresent(Int.self, forKey: .itemBorderRadius)
+        itemWidth = try container.decodeIfPresent(DimensionValue.self, forKey: .itemWidth)
+
+        // Slider
+        min = try container.decodeIfPresent(Int.self, forKey: .min)
+        max = try container.decodeIfPresent(Int.self, forKey: .max)
+        defaultValue = try container.decodeIfPresent(Int.self, forKey: .defaultValue)
+        fillColor = try container.decodeIfPresent(String.self, forKey: .fillColor)
+        trackColor = try container.decodeIfPresent(String.self, forKey: .trackColor)
+        thumbColor = try container.decodeIfPresent(String.self, forKey: .thumbColor)
+        thumbSize = try container.decodeIfPresent(Int.self, forKey: .thumbSize)
+        trackHeight = try container.decodeIfPresent(Int.self, forKey: .trackHeight)
+        showValue = try container.decodeIfPresent(Bool.self, forKey: .showValue)
+        valuePrefix = try container.decodeIfPresent(String.self, forKey: .valuePrefix)
+        valueSuffix = try container.decodeIfPresent(String.self, forKey: .valueSuffix)
+        showMinMax = try container.decodeIfPresent(Bool.self, forKey: .showMinMax)
+        showTicks = try container.decodeIfPresent(Bool.self, forKey: .showTicks)
+        tickCount = try container.decodeIfPresent(Int.self, forKey: .tickCount)
+        valueColor = try container.decodeIfPresent(String.self, forKey: .valueColor)
+        valueFontSize = try container.decodeIfPresent(Int.self, forKey: .valueFontSize)
+        valueFontWeight = try container.decodeIfPresent(String.self, forKey: .valueFontWeight)
+        suffixFontSize = try container.decodeIfPresent(Int.self, forKey: .suffixFontSize)
+        labelColor = try container.decodeIfPresent(String.self, forKey: .labelColor)
+
+        // Button padding
+        paddingHorizontal = try container.decodeIfPresent(Int.self, forKey: .paddingHorizontal)
+        paddingVertical = try container.decodeIfPresent(Int.self, forKey: .paddingVertical)
+        fontFamily = try container.decodeIfPresent(String.self, forKey: .fontFamily)
+
+        identifier = try container.decodeIfPresent(String.self, forKey: .identifier)
+        props = try container.decodeIfPresent([String: AnyCodable].self, forKey: .props)
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        
+        try container.encodeIfPresent(text, forKey: .text)
+        try container.encodeIfPresent(variant, forKey: .variant)
+        try container.encodeIfPresent(color, forKey: .color)
+        try container.encodeIfPresent(align, forKey: .align)
+        try container.encodeIfPresent(fontWeight, forKey: .fontWeight)
+        
+        try container.encodeIfPresent(src, forKey: .src)
+        try container.encodeIfPresent(alt, forKey: .alt)
+        try container.encodeIfPresent(width, forKey: .width)
+        try container.encodeIfPresent(height, forKey: .height)
+        try container.encodeIfPresent(borderRadius, forKey: .borderRadius)
+        try container.encodeIfPresent(objectFit, forKey: .objectFit)
+        
+        try container.encodeIfPresent(poster, forKey: .poster)
+        try container.encodeIfPresent(autoplay, forKey: .autoplay)
+        try container.encodeIfPresent(loop, forKey: .loop)
+        try container.encodeIfPresent(muted, forKey: .muted)
+        try container.encodeIfPresent(controls, forKey: .controls)
+        
+        try container.encodeIfPresent(icon, forKey: .icon)
+        try container.encodeIfPresent(size, forKey: .size)
+        
+        try container.encodeIfPresent(action, forKey: .action)
+        try container.encodeIfPresent(fullWidth, forKey: .fullWidth)
+        try container.encodeIfPresent(backgroundColor, forKey: .backgroundColor)
+        try container.encodeIfPresent(textColor, forKey: .textColor)
+        try container.encodeIfPresent(preset, forKey: .preset)
+        try container.encodeIfPresent(iconPosition, forKey: .iconPosition)
+        
+        try container.encodeIfPresent(thickness, forKey: .thickness)
+        // Encode style using checklistStyle key (maps to 'style' in JSON)
+        try container.encodeIfPresent(style, forKey: .checklistStyle)
+        
+        try container.encodeIfPresent(placeholder, forKey: .placeholder)
+        try container.encodeIfPresent(placeholderColor, forKey: .placeholderColor)
+        try container.encodeIfPresent(label, forKey: .label)
+        try container.encodeIfPresent(fieldLabel, forKey: .fieldLabel)
+        try container.encodeIfPresent(inputType, forKey: .inputType)
+        try container.encodeIfPresent(required, forKey: .required)
+        try container.encodeIfPresent(fieldName, forKey: .fieldName)
+        
+        try container.encodeIfPresent(items, forKey: .items)
+        try container.encodeIfPresent(allowMultiple, forKey: .allowMultiple)
+        try container.encodeIfPresent(minSelections, forKey: .minSelections)
+        try container.encodeIfPresent(maxSelections, forKey: .maxSelections)
+        try container.encodeIfPresent(autoAdvance, forKey: .autoAdvance)
+        try container.encodeIfPresent(checklistStyle, forKey: .checklistStyle)
+        try container.encodeIfPresent(columns, forKey: .columns)
+        try container.encodeIfPresent(activeColor, forKey: .activeColor)
+        try container.encodeIfPresent(inactiveColor, forKey: .inactiveColor)
+        try container.encodeIfPresent(fontSize, forKey: .fontSize)
+        try container.encodeIfPresent(itemPadding, forKey: .itemPadding)
+        try container.encodeIfPresent(itemGap, forKey: .itemGap)
+        try container.encodeIfPresent(itemBorderRadius, forKey: .itemBorderRadius)
+        try container.encodeIfPresent(itemWidth, forKey: .itemWidth)
+
+        // Slider
+        try container.encodeIfPresent(min, forKey: .min)
+        try container.encodeIfPresent(max, forKey: .max)
+        try container.encodeIfPresent(defaultValue, forKey: .defaultValue)
+        try container.encodeIfPresent(fillColor, forKey: .fillColor)
+        try container.encodeIfPresent(trackColor, forKey: .trackColor)
+        try container.encodeIfPresent(thumbColor, forKey: .thumbColor)
+        try container.encodeIfPresent(thumbSize, forKey: .thumbSize)
+        try container.encodeIfPresent(trackHeight, forKey: .trackHeight)
+        try container.encodeIfPresent(showValue, forKey: .showValue)
+        try container.encodeIfPresent(valuePrefix, forKey: .valuePrefix)
+        try container.encodeIfPresent(valueSuffix, forKey: .valueSuffix)
+        try container.encodeIfPresent(showMinMax, forKey: .showMinMax)
+        try container.encodeIfPresent(showTicks, forKey: .showTicks)
+        try container.encodeIfPresent(tickCount, forKey: .tickCount)
+        try container.encodeIfPresent(valueColor, forKey: .valueColor)
+        try container.encodeIfPresent(valueFontSize, forKey: .valueFontSize)
+        try container.encodeIfPresent(valueFontWeight, forKey: .valueFontWeight)
+        try container.encodeIfPresent(suffixFontSize, forKey: .suffixFontSize)
+        try container.encodeIfPresent(labelColor, forKey: .labelColor)
+
+        // Button padding
+        try container.encodeIfPresent(paddingHorizontal, forKey: .paddingHorizontal)
+        try container.encodeIfPresent(paddingVertical, forKey: .paddingVertical)
+        try container.encodeIfPresent(fontFamily, forKey: .fontFamily)
+
+        try container.encodeIfPresent(identifier, forKey: .identifier)
+        try container.encodeIfPresent(props, forKey: .props)
+    }
 }
 
 public struct ChecklistItem: Codable, Identifiable, Sendable {
