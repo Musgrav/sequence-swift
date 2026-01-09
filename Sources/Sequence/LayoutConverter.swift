@@ -66,6 +66,12 @@ public struct LayoutConverter {
             lastY = currentY
         }
 
+        // Check if there are any flexible spacers - if so, don't use ScrollView
+        // because Spacer() doesn't work inside ScrollView
+        let hasFlexibleSpacer = children.contains { node in
+            node.type == .spacer && node.content?.spacerFlex != nil && node.content?.spacerFlex ?? 0 > 0
+        }
+
         // Create root layout
         let vstack = LayoutNode(
             id: "\(screenId)_vstack",
@@ -78,20 +84,27 @@ public struct LayoutConverter {
                 height: .fill
             )
         )
-        
-        let scroll = LayoutNode(
-            id: "\(screenId)_scroll",
-            type: .scroll,
-            children: [vstack],
-            layout: LayoutProperties(
-                scrollDirection: .vertical,
-                showsScrollIndicator: false
+
+        // If we have flexible spacers, use VStack directly without ScrollView
+        // This allows Spacer() to expand and push content to edges
+        let rootNode: LayoutNode
+        if hasFlexibleSpacer {
+            rootNode = vstack
+        } else {
+            rootNode = LayoutNode(
+                id: "\(screenId)_scroll",
+                type: .scroll,
+                children: [vstack],
+                layout: LayoutProperties(
+                    scrollDirection: .vertical,
+                    showsScrollIndicator: false
+                )
             )
-        )
-        
+        }
+
         return ScreenLayout(
             version: 1,
-            root: scroll,
+            root: rootNode,
             backgroundColor: content.backgroundColor,
             backgroundGradient: convertGradient(content.backgroundGradient),
             safeAreaMode: .respect
