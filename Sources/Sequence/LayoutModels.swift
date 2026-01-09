@@ -324,7 +324,7 @@ public struct ContentProperties: Codable, Sendable {
     public var text: String?
     public var textVariant: TextVariant?
     public var textAlign: TextAlign?
-    public var textColor: String?
+    public var textColor: ColorValue?  // Supports adaptive { light, dark } or fixed hex
     public var fontWeight: FontWeight?
     public var fontSize: CGFloat?
     public var fontFamily: String?        // Custom font family name
@@ -349,7 +349,7 @@ public struct ContentProperties: Codable, Sendable {
     public var buttonAction: LayoutButtonAction?
     public var buttonIcon: String?
     public var buttonIconPosition: IconPosition?
-    public var buttonTextColor: String?  // Custom text color for buttons
+    public var buttonTextColor: ColorValue?  // Custom text color for buttons (adaptive)
     public var fullWidth: Bool?
     
     // Input
@@ -811,6 +811,56 @@ public struct ExperimentInfo: Codable, Sendable {
         self.id = id
         self.variantId = variantId
         self.variantName = variantName
+    }
+}
+
+// MARK: - Adaptive Color (for system theme support)
+
+/// Represents a color that can adapt to light/dark mode
+/// Can be decoded from either a simple hex string or { light: string, dark: string }
+public enum ColorValue: Codable, Sendable, Equatable {
+    case fixed(String)
+    case adaptive(light: String, dark: String)
+
+    public init(from decoder: Decoder) throws {
+        // Try to decode as a simple string first
+        if let container = try? decoder.singleValueContainer(),
+           let string = try? container.decode(String.self) {
+            self = .fixed(string)
+            return
+        }
+
+        // Try to decode as adaptive color object
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let light = try container.decode(String.self, forKey: .light)
+        let dark = try container.decode(String.self, forKey: .dark)
+        self = .adaptive(light: light, dark: dark)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .fixed(let color):
+            var container = encoder.singleValueContainer()
+            try container.encode(color)
+        case .adaptive(let light, let dark):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(light, forKey: .light)
+            try container.encode(dark, forKey: .dark)
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case light, dark
+    }
+
+    /// Resolve the color based on the current color scheme
+    public func resolve(for colorScheme: ColorScheme) -> String {
+        switch self {
+        case .fixed(let color):
+            return color
+        case .adaptive(let light, let dark):
+            return colorScheme == .dark ? dark : light
+        }
     }
 }
 

@@ -247,16 +247,27 @@ struct SpacerNodeView: View {
 
 struct TextNodeView: View {
     let content: ContentProperties?
-    
+
     // State to trigger refresh when font loads
     @State private var fontRefreshTrigger = UUID()
-    
+
     // Get scale factor from environment for proportional font sizing
     @Environment(\.layoutScaleFactor) private var scaleFactor
-    
+    // Get color scheme for adaptive colors
+    @Environment(\.colorScheme) private var colorScheme
+
+    /// Resolve text color - handles adaptive colors
+    private var resolvedTextColor: Color {
+        if let colorValue = content?.textColor {
+            return Color(hex: colorValue.resolve(for: colorScheme))
+        }
+        // Default to white for dark backgrounds, black for light
+        return colorScheme == .dark ? Color(hex: "#ffffff") : Color(hex: "#000000")
+    }
+
     var body: some View {
         textView
-            .foregroundColor(Color(hex: content?.textColor ?? "#ffffff"))
+            .foregroundColor(resolvedTextColor)
             .multilineTextAlignment(alignmentForValue(content?.textAlign))
             .lineLimit(content?.lineLimit)
             .lineSpacing(lineSpacingForContent())
@@ -581,10 +592,12 @@ struct ButtonNodeView: View {
     let content: ContentProperties?
     let style: StyleProperties?
     let onTap: (LayoutButtonAction) -> Void
-    
+
     // Get scale factor from environment for proportional sizing
     @Environment(\.layoutScaleFactor) private var scaleFactor
-    
+    // Get color scheme for adaptive colors
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         Button(action: {
             if let action = content?.buttonAction {
@@ -597,10 +610,10 @@ struct ButtonNodeView: View {
                    content?.buttonIconPosition != .trailing {
                     Text(icon).font(.system(size: 20 * scaleFactor))
                 }
-                
+
                 Text(content?.buttonText ?? "Continue")
                     .font(.system(size: 17 * scaleFactor, weight: .semibold))
-                
+
                 // Trailing icon
                 if let icon = content?.buttonIcon,
                    content?.buttonIconPosition == .trailing {
@@ -616,11 +629,11 @@ struct ButtonNodeView: View {
             .overlay(overlayForVariant(content?.buttonVariant, radius: (style?.borderRadius?.cornerRadius ?? 12) * scaleFactor))
         }
     }
-    
-    // Use custom button text color if provided, otherwise fall back to variant default
+
+    // Use custom button text color if provided (supports adaptive), otherwise fall back to variant default
     private var buttonTextColor: Color {
-        if let customColor = content?.buttonTextColor {
-            return Color(hex: customColor)
+        if let colorValue = content?.buttonTextColor {
+            return Color(hex: colorValue.resolve(for: colorScheme))
         }
         return textColorForVariant(content?.buttonVariant)
     }
@@ -1216,6 +1229,7 @@ struct PickerNodeView: View {
     let style: StyleProperties?
     @State private var selectedValue: Int = 0
     @Environment(\.layoutScaleFactor) private var scaleFactor
+    @Environment(\.colorScheme) private var colorScheme
 
     private var pickerHeight: CGFloat {
         (content?.pickerHeight ?? 200) * scaleFactor
@@ -1226,7 +1240,10 @@ struct PickerNodeView: View {
     }
 
     private var textColor: Color {
-        Color(hex: content?.textColor ?? "rgba(255,255,255,0.6)")
+        if let colorValue = content?.textColor {
+            return Color(hex: colorValue.resolve(for: colorScheme))
+        }
+        return Color(hex: "rgba(255,255,255,0.6)")
     }
 
     private var selectedTextColor: Color {
@@ -1391,13 +1408,17 @@ struct StickerNodeView: View {
     let content: ContentProperties?
     let style: StyleProperties?
     @Environment(\.layoutScaleFactor) private var scaleFactor
+    @Environment(\.colorScheme) private var colorScheme
 
     private var backgroundColor: Color {
         Color(hex: style?.backgroundColor ?? "#ef4444")
     }
 
     private var textColor: Color {
-        Color(hex: content?.textColor ?? "#ffffff")
+        if let colorValue = content?.textColor {
+            return Color(hex: colorValue.resolve(for: colorScheme))
+        }
+        return Color(hex: "#ffffff")
     }
 
     private var stickerSize: StickerSize {

@@ -124,7 +124,7 @@ public struct LayoutConverter {
                     text: block.content.text,
                     textVariant: convertTextVariant(block.content.variant),
                     textAlign: convertTextAlign(block.content.align),
-                    textColor: block.content.color,
+                    textColor: block.content.color.map { .fixed($0) },
                     fontWeight: convertFontWeight(block.content.fontWeight),
                     fontSize: block.content.fontSizeValue,
                     fontFamily: block.content.fontFamily,
@@ -158,7 +158,7 @@ public struct LayoutConverter {
                     buttonAction: convertButtonAction(block.content.action),
                     buttonIcon: block.content.icon,
                     buttonIconPosition: block.content.iconPosition == "right" ? .trailing : .leading,
-                    buttonTextColor: block.content.textColor,
+                    buttonTextColor: block.content.textColor.map { .fixed($0) },
                     fullWidth: block.content.fullWidth
                 )
             )
