@@ -610,13 +610,21 @@ struct ButtonNodeView: View {
             .frame(maxWidth: content?.fullWidth == true ? .infinity : nil)
             .padding(.horizontal, 24 * scaleFactor)
             .padding(.vertical, 16 * scaleFactor)
-            .foregroundColor(textColorForVariant(content?.buttonVariant))
+            .foregroundColor(buttonTextColor)
             .background(backgroundForVariant(content?.buttonVariant, customColor: style?.backgroundColor))
             .cornerRadius((style?.borderRadius?.cornerRadius ?? 12) * scaleFactor)
             .overlay(overlayForVariant(content?.buttonVariant, radius: (style?.borderRadius?.cornerRadius ?? 12) * scaleFactor))
         }
     }
     
+    // Use custom button text color if provided, otherwise fall back to variant default
+    private var buttonTextColor: Color {
+        if let customColor = content?.buttonTextColor {
+            return Color(hex: customColor)
+        }
+        return textColorForVariant(content?.buttonVariant)
+    }
+
     private func textColorForVariant(_ variant: ButtonVariant?) -> Color {
         switch variant {
         case .ghost, .outline:

@@ -349,6 +349,7 @@ public struct ContentProperties: Codable, Sendable {
     public var buttonAction: LayoutButtonAction?
     public var buttonIcon: String?
     public var buttonIconPosition: IconPosition?
+    public var buttonTextColor: String?  // Custom text color for buttons
     public var fullWidth: Bool?
     
     // Input

@@ -158,6 +158,7 @@ public struct LayoutConverter {
                     buttonAction: convertButtonAction(block.content.action),
                     buttonIcon: block.content.icon,
                     buttonIconPosition: block.content.iconPosition == "right" ? .trailing : .leading,
+                    buttonTextColor: block.content.textColor,
                     fullWidth: block.content.fullWidth
                 )
             )
