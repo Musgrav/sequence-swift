@@ -117,16 +117,6 @@ public struct LayoutConverter {
         
         switch block.type {
         case .text:
-            // Debug: log font properties being converted
-            let textPreview = block.content.text?.prefix(20) ?? "empty"
-            print("🎨 [LayoutConverter] Converting text block '\(textPreview)...'")
-            print("🎨 [LayoutConverter]   - variant: \(block.content.variant ?? "nil")")
-            print("🎨 [LayoutConverter]   - fontFamily: \(block.content.fontFamily ?? "nil") (will use: \(block.content.fontFamily ?? "system default"))")
-            print("🎨 [LayoutConverter]   - fontSize: \(block.content.fontSizeValue.map { String(format: "%.1f", $0) } ?? "nil") (will use variant default if nil)")
-            print("🎨 [LayoutConverter]   - fontWeight: \(block.content.fontWeight ?? "nil") -> \(convertFontWeight(block.content.fontWeight)?.rawValue ?? "regular")")
-            print("🎨 [LayoutConverter]   - lineHeight: \(block.content.lineHeight.map { "\($0)" } ?? "nil")")
-            print("🎨 [LayoutConverter]   - letterSpacing: \(block.content.letterSpacing.map { "\($0)" } ?? "nil")")
-            
             return LayoutNode(
                 id: nodeId,
                 type: .text,

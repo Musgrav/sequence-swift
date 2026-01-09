@@ -60,9 +60,8 @@ public struct OnboardingView: View {
             } else if let screen = viewModel.currentScreen {
                 screenView(for: screen)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .ignoresSafeArea(.all)
-                    .transition(.opacity.animation(.easeInOut(duration: 0.3)))
-                    .id(screen.id)
+                    .id(screen.id) // Required for proper view recreation
+                    .transition(.opacity)
                     .onAppear { print("🟢 [OnboardingView] State: SHOWING SCREEN '\(screen.name)'") }
             } else {
                 EmptyStateView()
@@ -171,9 +170,6 @@ struct ScreenView: View {
     let onScreenAppear: () -> Void
     let onSkip: () -> Void
 
-    // Cache the layout to avoid recomputation on every render
-    @State private var cachedLayout: ScreenLayout?
-
     // Calculate extra top padding when progress indicator is at top
     private var extraTopPadding: CGFloat {
         guard let indicator = progressIndicator,
@@ -183,22 +179,13 @@ struct ScreenView: View {
         return 30 // Extra padding below the progress bar (16pt bar position + 4pt height + 10pt gap)
     }
 
-    // Get cached layout or compute if needed
+    // Compute layout immediately (not lazily) to prevent flash during transition
     private var declarativeLayout: ScreenLayout {
-        if let cached = cachedLayout {
-            return cached
-        }
-        return computeLayout()
-    }
-
-    // Convert old blocks to declarative layout
-    private func computeLayout() -> ScreenLayout {
-        let layout = LayoutConverter.convert(
+        LayoutConverter.convert(
             from: screen.content,
             screenId: screen.id,
             extraTopPadding: extraTopPadding
         )
-        return layout
     }
     
     // Adapter to convert LayoutButtonAction to ButtonAction
@@ -232,10 +219,6 @@ struct ScreenView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            // Cache the layout on first appearance
-            if cachedLayout == nil {
-                cachedLayout = computeLayout()
-            }
             // Track all views for debugging/analytics
             Sequence.shared.trackScreenViewed(screenId: screen.id, screenName: screen.name)
             // Track first view only (deduplicated)
