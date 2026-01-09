@@ -1558,6 +1558,46 @@ struct EmptyStateView: View {
 
 extension Color {
     init(hex: String) {
+        // Handle rgba() format: rgba(255,255,255,0.9) or rgba(255, 255, 255, 0.9)
+        if hex.lowercased().hasPrefix("rgba(") {
+            let inner = hex.dropFirst(5).dropLast() // Remove "rgba(" and ")"
+            let components = inner.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            if components.count >= 4,
+               let r = Double(components[0]),
+               let g = Double(components[1]),
+               let b = Double(components[2]),
+               let a = Double(components[3]) {
+                self.init(
+                    .sRGB,
+                    red: r / 255,
+                    green: g / 255,
+                    blue: b / 255,
+                    opacity: a
+                )
+                return
+            }
+        }
+
+        // Handle rgb() format: rgb(255,255,255) or rgb(255, 255, 255)
+        if hex.lowercased().hasPrefix("rgb(") {
+            let inner = hex.dropFirst(4).dropLast() // Remove "rgb(" and ")"
+            let components = inner.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            if components.count >= 3,
+               let r = Double(components[0]),
+               let g = Double(components[1]),
+               let b = Double(components[2]) {
+                self.init(
+                    .sRGB,
+                    red: r / 255,
+                    green: g / 255,
+                    blue: b / 255,
+                    opacity: 1.0
+                )
+                return
+            }
+        }
+
+        // Handle hex format
         let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
         var int: UInt64 = 0
         Scanner(string: hex).scanHexInt64(&int)

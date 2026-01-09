@@ -605,19 +605,19 @@ struct ButtonNodeView: View {
             }
         }) {
             HStack(spacing: 8 * scaleFactor) {
-                // Leading icon
+                // Leading icon (SF Symbol or emoji)
                 if let icon = content?.buttonIcon,
                    content?.buttonIconPosition != .trailing {
-                    Text(icon).font(.system(size: 20 * scaleFactor))
+                    iconView(for: icon, size: 20 * scaleFactor)
                 }
 
                 Text(content?.buttonText ?? "Continue")
                     .font(.system(size: 17 * scaleFactor, weight: .semibold))
 
-                // Trailing icon
+                // Trailing icon (SF Symbol or emoji)
                 if let icon = content?.buttonIcon,
                    content?.buttonIconPosition == .trailing {
-                    Text(icon).font(.system(size: 20 * scaleFactor))
+                    iconView(for: icon, size: 20 * scaleFactor)
                 }
             }
             .frame(maxWidth: content?.fullWidth == true ? .infinity : nil)
@@ -636,6 +636,21 @@ struct ButtonNodeView: View {
             return Color(hex: colorValue.resolve(for: colorScheme))
         }
         return textColorForVariant(content?.buttonVariant)
+    }
+
+    // Render icon as SF Symbol if it looks like one, otherwise as emoji/text
+    @ViewBuilder
+    private func iconView(for icon: String, size: CGFloat) -> some View {
+        // SF Symbols typically contain dots (e.g., "chevron.right", "apple.logo")
+        // or are lowercase without emoji characters
+        if icon.contains(".") || (icon.allSatisfy { $0.isLetter || $0.isNumber } && icon == icon.lowercased()) {
+            Image(systemName: icon)
+                .font(.system(size: size))
+        } else {
+            // Emoji or other text
+            Text(icon)
+                .font(.system(size: size))
+        }
     }
 
     private func textColorForVariant(_ variant: ButtonVariant?) -> Color {
