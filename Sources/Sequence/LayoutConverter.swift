@@ -65,14 +65,7 @@ public struct LayoutConverter {
             
             lastY = currentY
         }
-        
-        // Add flexible bottom spacer
-        children.append(LayoutNode(
-            id: "\(screenId)_spacer_flex",
-            type: .spacer,
-            content: ContentProperties(spacerFlex: 1, spacerMinSize: 40)
-        ))
-        
+
         // Create root layout
         let vstack = LayoutNode(
             id: "\(screenId)_vstack",
@@ -167,6 +160,15 @@ public struct LayoutConverter {
             )
             
         case .spacer:
+            // Check if this is a flexible spacer
+            if block.content.flex == true {
+                return LayoutNode(
+                    id: nodeId,
+                    type: .spacer,
+                    content: ContentProperties(spacerFlex: 1, spacerMinSize: 0)
+                )
+            }
+            // Fixed height spacer
             let height: CGFloat
             switch block.content.height {
             case .number(let h): height = CGFloat(h)

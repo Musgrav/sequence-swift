@@ -455,7 +455,10 @@ public struct BlockContent: Codable, Sendable {
     // Custom
     public var identifier: String?
     public var props: [String: AnyCodable]?
-    
+
+    // Spacer flex (for flexible spacers that fill available space)
+    public var flex: Bool?
+
     // Coding keys - 'style' is shared between divider and checklist
     enum CodingKeys: String, CodingKey {
         case text, variant, color, align, fontWeight
@@ -471,6 +474,7 @@ public struct BlockContent: Codable, Sendable {
         case columns, activeColor, inactiveColor
         case itemPadding, itemGap, itemBorderRadius, itemWidth
         case identifier, props
+        case flex
     }
     
     public init(from decoder: Decoder) throws {
@@ -579,6 +583,7 @@ public struct BlockContent: Codable, Sendable {
         
         identifier = try container.decodeIfPresent(String.self, forKey: .identifier)
         props = try container.decodeIfPresent([String: AnyCodable].self, forKey: .props)
+        flex = try container.decodeIfPresent(Bool.self, forKey: .flex)
     }
     
     public func encode(to encoder: Encoder) throws {
@@ -646,6 +651,7 @@ public struct BlockContent: Codable, Sendable {
         
         try container.encodeIfPresent(identifier, forKey: .identifier)
         try container.encodeIfPresent(props, forKey: .props)
+        try container.encodeIfPresent(flex, forKey: .flex)
     }
 }
 

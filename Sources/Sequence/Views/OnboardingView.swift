@@ -61,10 +61,7 @@ public struct OnboardingView: View {
                 screenView(for: screen)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .ignoresSafeArea(.all)
-                    .transition(.asymmetric(
-                        insertion: .move(edge: .trailing).combined(with: .opacity),
-                        removal: .move(edge: .leading).combined(with: .opacity)
-                    ))
+                    .transition(.opacity.animation(.easeInOut(duration: 0.3)))
                     .id(screen.id)
                     .onAppear { print("🟢 [OnboardingView] State: SHOWING SCREEN '\(screen.name)'") }
             } else {
