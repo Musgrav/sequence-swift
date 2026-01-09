@@ -107,9 +107,10 @@ public struct OnboardingView: View {
                     currentIndex: viewModel.currentScreenIndex,
                     totalScreens: viewModel.totalScreens
                 )
-                .padding(.top, 60)
+                .padding(.top, 16) // Padding from safe area top
                 Spacer()
             }
+            .padding(.top, 0) // Respect safe area
         } else {
             VStack {
                 Spacer()
@@ -169,28 +170,34 @@ struct ScreenView: View {
     let onButtonTap: (ButtonAction) -> Void
     let onScreenAppear: () -> Void
     let onSkip: () -> Void
-    
+
+    // Cache the layout to avoid recomputation on every render
+    @State private var cachedLayout: ScreenLayout?
+
     // Calculate extra top padding when progress indicator is at top
     private var extraTopPadding: CGFloat {
         guard let indicator = progressIndicator,
               indicator.enabled,
               indicator.position == .top,
               totalScreens > 1 else { return 0 }
-        return 40 // Extra padding below the progress bar
+        return 30 // Extra padding below the progress bar (16pt bar position + 4pt height + 10pt gap)
     }
-    
-    // Convert old blocks to declarative layout
+
+    // Get cached layout or compute if needed
     private var declarativeLayout: ScreenLayout {
+        if let cached = cachedLayout {
+            return cached
+        }
+        return computeLayout()
+    }
+
+    // Convert old blocks to declarative layout
+    private func computeLayout() -> ScreenLayout {
         let layout = LayoutConverter.convert(
-            from: screen.content, 
+            from: screen.content,
             screenId: screen.id,
             extraTopPadding: extraTopPadding
         )
-        print("🎨 [ScreenView] Converted layout for '\(screen.name)':")
-        print("🎨 [ScreenView]   - Root type: \(layout.root.type)")
-        print("🎨 [ScreenView]   - Root children: \(layout.root.children?.count ?? 0)")
-        print("🎨 [ScreenView]   - Background: \(layout.backgroundColor ?? "nil")")
-        print("🎨 [ScreenView]   - Extra top padding: \(extraTopPadding)")
         return layout
     }
     
@@ -215,18 +222,20 @@ struct ScreenView: View {
         ZStack {
             // Background layer - fills entire screen including safe areas
             backgroundView
-            
-            // Content layer
+                .ignoresSafeArea(.all)
+
+            // Content layer - respects safe areas
             ScreenLayoutView(
                 layout: declarativeLayout,
                 onButtonTap: handleLayoutAction
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(backgroundView)
-        .ignoresSafeArea(.all)
         .onAppear {
-            print("🎨 [ScreenView] Rendering '\(screen.name)' using DECLARATIVE layout")
+            // Cache the layout on first appearance
+            if cachedLayout == nil {
+                cachedLayout = computeLayout()
+            }
             // Track all views for debugging/analytics
             Sequence.shared.trackScreenViewed(screenId: screen.id, screenName: screen.name)
             // Track first view only (deduplicated)

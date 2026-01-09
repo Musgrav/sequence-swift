@@ -35,8 +35,8 @@ public struct LayoutConverter {
         var children: [LayoutNode] = []
         var lastY: CGFloat = 0
         
-        // Add top spacing (base 60pt + extra for progress indicator if at top)
-        let topSpacing: CGFloat = 60 + extraTopPadding
+        // Add top spacing (base 24pt from safe area + extra for progress indicator if at top)
+        let topSpacing: CGFloat = 24 + extraTopPadding
         children.append(LayoutNode(
             id: "\(screenId)_spacer_top",
             type: .spacer,
