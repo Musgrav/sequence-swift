@@ -177,9 +177,72 @@ public struct WebViewRenderer: UIViewRepresentable {
 
     public class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var parent: WebViewRenderer
+        private var backgroundObserver: NSObjectProtocol?
+        private var foregroundObserver: NSObjectProtocol?
 
         init(_ parent: WebViewRenderer) {
             self.parent = parent
+            super.init()
+            setupLifecycleObservers()
+        }
+
+        deinit {
+            removeLifecycleObservers()
+        }
+
+        // MARK: - App Lifecycle Observers (for drop-off detection)
+
+        private func setupLifecycleObservers() {
+            // Track when app goes to background - potential drop-off
+            backgroundObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.willResignActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.handleAppWillResignActive()
+            }
+
+            // Track when app returns to foreground
+            foregroundObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.handleAppDidBecomeActive()
+            }
+        }
+
+        private func removeLifecycleObservers() {
+            if let observer = backgroundObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            if let observer = foregroundObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+        }
+
+        private func handleAppWillResignActive() {
+            // Only track drop-off if we have an active session AND user has viewed at least one screen
+            guard Sequence.shared.currentSessionId != nil,
+                  Sequence.shared.currentScreenId != nil else {
+                print("[Sequence WebView] App going to background - no active screen, skipping drop-off tracking")
+                return
+            }
+
+            // User is leaving the app while onboarding - track drop-off
+            print("[Sequence WebView] App going to background - tracking drop-off on screen: \(Sequence.shared.currentScreenId ?? "unknown")")
+            Sequence.shared.trackScreenDropOff(reason: "app_backgrounded")
+
+            // Flush events immediately so we don't lose them
+            Task {
+                await Sequence.shared.flush()
+            }
+        }
+
+        private func handleAppDidBecomeActive() {
+            print("[Sequence WebView] App returning to foreground")
+            // User returned - they might continue onboarding
+            // The session is still active, next screen view will be tracked
         }
 
         // MARK: - WKScriptMessageHandler
@@ -200,18 +263,28 @@ public struct WebViewRenderer: UIViewRepresentable {
             case "screenChange":
                 if let screenId = body["screenId"] as? String {
                     parent.onScreenChange?(screenId)
-                    // Track the event
-                    Sequence.shared.trackScreenViewed(
+                    let screenName = body["screenName"] as? String
+                    let isFirstView = body["isFirstView"] as? Bool ?? false
+
+                    // Use the new unified tracking method that handles time tracking
+                    Sequence.shared.trackScreenEnter(
                         screenId: screenId,
-                        screenName: body["screenName"] as? String
+                        screenName: screenName,
+                        isFirstView: isFirstView
                     )
                 }
 
             case "onboardingComplete":
                 print("[Sequence WebView] Onboarding complete")
+                // End session as completed before marking onboarding complete
+                Sequence.shared.endSession(completed: true)
                 Sequence.shared.markOnboardingCompleted()
                 if let data = body["collectedData"] as? [String: Any] {
                     parent.onDataCollected?(data)
+                }
+                // Flush events immediately
+                Task {
+                    await Sequence.shared.flush()
                 }
                 parent.onComplete()
 
@@ -256,7 +329,12 @@ public struct WebViewRenderer: UIViewRepresentable {
             switch actionType {
             case "complete":
                 print("[Sequence WebView] Complete action")
+                Sequence.shared.endSession(completed: true)
                 Sequence.shared.markOnboardingCompleted()
+                // Flush events immediately
+                Task {
+                    await Sequence.shared.flush()
+                }
                 parent.onComplete()
 
             case "next", "screen":
@@ -391,6 +469,22 @@ public struct WebViewOnboardingView: View {
                     }
                 }
                 .ignoresSafeArea()
+            }
+        }
+        .background(Color.black)
+        .ignoresSafeArea(.all)
+        .onAppear {
+            // Start a new session when onboarding view appears
+            Sequence.shared.startSession()
+        }
+        .onDisappear {
+            // If session is still active when view disappears (user dismissed without completing),
+            // end the session as dropped off
+            if Sequence.shared.currentSessionId != nil {
+                Sequence.shared.endSession(completed: false)
+                Task {
+                    await Sequence.shared.flush()
+                }
             }
         }
     }

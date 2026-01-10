@@ -725,10 +725,22 @@ public struct AnyCodable: Codable, Sendable {
 // MARK: - Events
 
 public enum EventType: String, Sendable {
+    // Session events
+    case sessionStarted = "session_started"
+    case sessionCompleted = "session_completed"
+    case sessionDroppedOff = "session_dropped_off"
+
+    // Screen events
     case screenViewed = "screen_viewed"
+    case screenFirstViewed = "screen_first_viewed"
     case screenCompleted = "screen_completed"
     case screenSkipped = "screen_skipped"
+    case screenDroppedOff = "screen_dropped_off"
+
+    // Interaction events
     case buttonTapped = "button_tapped"
+
+    // Legacy (kept for backward compatibility)
     case onboardingStarted = "onboarding_started"
     case onboardingCompleted = "onboarding_completed"
 }

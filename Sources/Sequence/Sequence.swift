@@ -41,6 +41,23 @@ public final class Sequence: ObservableObject {
     private let flushInterval: TimeInterval = 10.0 // Flush events every 10 seconds
     private let maxBatchSize = 20
     private var cancellables = Set<AnyCancellable>()
+
+    // MARK: - Session Tracking Properties
+
+    /// Current onboarding session ID (unique per app open)
+    internal private(set) var currentSessionId: String?
+
+    /// Time when the current session started
+    private var sessionStartTime: Date?
+
+    /// Current screen being viewed
+    internal private(set) var currentScreenId: String?
+
+    /// Time when user entered the current screen
+    private var currentScreenStartTime: Date?
+
+    /// Number of screens viewed in this session
+    private var screensViewedCount: Int = 0
     
     // User defaults keys
     private let onboardingCompletedKey = "sequence_onboarding_completed"
@@ -242,7 +259,7 @@ public final class Sequence: ObservableObject {
         let event = OnboardingEvent(
             eventType: eventType.rawValue,
             screenId: screenId,
-            userId: userId ?? "anonymous",
+            userId: userId ?? deviceId,
             deviceId: deviceId,
             timestamp: ISO8601DateFormatter().string(from: Date()),
             properties: properties
@@ -265,7 +282,17 @@ public final class Sequence: ObservableObject {
         }
         track(eventType: .screenViewed, screenId: screenId, properties: props.isEmpty ? nil : props)
     }
-    
+
+    /// Track when a screen is viewed for the first time (unique view)
+    /// This is the key metric for conversion tracking - only counts once per user per screen
+    public func trackScreenFirstViewed(screenId: String, screenName: String? = nil) {
+        var props: [String: Any] = [:]
+        if let name = screenName {
+            props["screen_name"] = name
+        }
+        track(eventType: .screenFirstViewed, screenId: screenId, properties: props.isEmpty ? nil : props)
+    }
+
     /// Track when a screen is completed
     public func trackScreenCompleted(screenId: String, screenName: String? = nil) {
         var props: [String: Any] = [:]
@@ -288,7 +315,144 @@ public final class Sequence: ObservableObject {
     public func trackButtonTapped(screenId: String, buttonText: String) {
         track(eventType: .buttonTapped, screenId: screenId, properties: ["button_text": buttonText])
     }
-    
+
+    // MARK: - Session Management
+
+    /// Start a new onboarding session
+    /// Call this when the onboarding view appears
+    public func startSession() {
+        // Generate new session ID
+        currentSessionId = UUID().uuidString
+        sessionStartTime = Date()
+        screensViewedCount = 0
+        currentScreenId = nil
+        currentScreenStartTime = nil
+
+        // Device info will be included by the WebViewRenderer which has UIKit access
+        let deviceModel = "iOS Device"
+        let osVersion = ProcessInfo.processInfo.operatingSystemVersionString
+
+        print("[Sequence] Started session: \(currentSessionId ?? "nil")")
+
+        // Track session start
+        track(
+            eventType: .sessionStarted,
+            properties: [
+                "session_id": currentSessionId ?? "",
+                "device_model": deviceModel,
+                "os_version": osVersion
+            ]
+        )
+
+        // Also track onboarding_started for backward compatibility
+        track(eventType: .onboardingStarted, properties: ["session_id": currentSessionId ?? ""])
+    }
+
+    /// End the current session
+    /// - Parameter completed: Whether the user completed onboarding or dropped off
+    internal func endSession(completed: Bool) {
+        guard let sessionId = currentSessionId, let startTime = sessionStartTime else {
+            return
+        }
+
+        let totalDuration = Int(Date().timeIntervalSince(startTime) * 1000) // ms
+
+        if completed {
+            track(
+                eventType: .sessionCompleted,
+                properties: [
+                    "session_id": sessionId,
+                    "total_duration_ms": totalDuration,
+                    "screens_viewed": screensViewedCount,
+                    "completed": true
+                ]
+            )
+        } else {
+            track(
+                eventType: .sessionDroppedOff,
+                properties: [
+                    "session_id": sessionId,
+                    "total_duration_ms": totalDuration,
+                    "screens_viewed": screensViewedCount,
+                    "last_screen_id": currentScreenId ?? "",
+                    "completed": false
+                ]
+            )
+        }
+
+        print("[Sequence] Ended session: \(sessionId), completed: \(completed)")
+
+        // Clear session state
+        currentSessionId = nil
+        sessionStartTime = nil
+        currentScreenId = nil
+        currentScreenStartTime = nil
+        screensViewedCount = 0
+    }
+
+    // MARK: - Screen Time Tracking
+
+    /// Track when user enters a screen (for time tracking)
+    /// Called automatically by WebViewRenderer
+    internal func trackScreenEnter(screenId: String, screenName: String?, isFirstView: Bool) {
+        // If there's a previous screen, track its exit
+        if let previousScreenId = currentScreenId, let previousStartTime = currentScreenStartTime {
+            let duration = Int(Date().timeIntervalSince(previousStartTime) * 1000) // ms
+            track(
+                eventType: .screenCompleted,
+                screenId: previousScreenId,
+                properties: [
+                    "session_id": currentSessionId ?? "",
+                    "duration_ms": duration,
+                    "next_screen_id": screenId
+                ]
+            )
+            print("[Sequence] Screen \(previousScreenId) completed in \(duration)ms")
+        }
+
+        // Set new current screen
+        currentScreenId = screenId
+        currentScreenStartTime = Date()
+        screensViewedCount += 1
+
+        // Build properties
+        var props: [String: Any] = [
+            "session_id": currentSessionId ?? "",
+            "screen_index": screensViewedCount - 1
+        ]
+        if let name = screenName {
+            props["screen_name"] = name
+        }
+
+        // Track the appropriate view event
+        if isFirstView {
+            track(eventType: .screenFirstViewed, screenId: screenId, properties: props)
+        } else {
+            track(eventType: .screenViewed, screenId: screenId, properties: props)
+        }
+    }
+
+    /// Track when user drops off on a specific screen (app backgrounded/closed)
+    internal func trackScreenDropOff(reason: String) {
+        guard let screenId = currentScreenId, let startTime = currentScreenStartTime else {
+            return
+        }
+
+        let duration = Int(Date().timeIntervalSince(startTime) * 1000) // ms
+
+        track(
+            eventType: .screenDroppedOff,
+            screenId: screenId,
+            properties: [
+                "session_id": currentSessionId ?? "",
+                "duration_ms": duration,
+                "drop_off_reason": reason
+            ]
+        )
+
+        print("[Sequence] Screen \(screenId) dropped off after \(duration)ms, reason: \(reason)")
+    }
+
     // MARK: - Event Flushing
     
     private func startFlushTimer() {
@@ -301,37 +465,54 @@ public final class Sequence: ObservableObject {
     /// Manually flush all queued events to the server
     public func flush() async {
         guard !eventQueue.isEmpty else { return }
-        guard let apiKey = apiKey else { return }
-        
+        guard let apiKey = apiKey else {
+            print("[Sequence] Cannot flush - no API key configured")
+            return
+        }
+
         let eventsToSend = eventQueue
         eventQueue.removeAll()
-        
-        let url = URL(string: "\(baseURL)/api/v1/events")!
+
+        let urlString = "\(baseURL)/api/v1/events"
+        guard let url = URL(string: urlString) else {
+            print("[Sequence] Invalid URL: \(urlString)")
+            eventQueue.insert(contentsOf: eventsToSend, at: 0)
+            return
+        }
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
+
         let payload = EventPayload(events: eventsToSend)
-        
+
         do {
             let encoder = JSONEncoder()
             encoder.keyEncodingStrategy = .convertToSnakeCase
             request.httpBody = try encoder.encode(payload)
-            
-            let (_, response) = try await URLSession.shared.data(for: request)
-            
-            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                print("[Sequence] Flushed \(eventsToSend.count) events")
+
+            print("[Sequence] Flushing \(eventsToSend.count) events to \(urlString)")
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            if let httpResponse = response as? HTTPURLResponse {
+                if httpResponse.statusCode == 200 {
+                    print("[Sequence] ✅ Flushed \(eventsToSend.count) events successfully")
+                } else {
+                    // Re-queue events on failure
+                    eventQueue.insert(contentsOf: eventsToSend, at: 0)
+                    let responseBody = String(data: data, encoding: .utf8) ?? "no body"
+                    print("[Sequence] ❌ Failed to flush events - HTTP \(httpResponse.statusCode): \(responseBody)")
+                }
             } else {
-                // Re-queue events on failure
                 eventQueue.insert(contentsOf: eventsToSend, at: 0)
-                print("[Sequence] Failed to flush events, re-queued")
+                print("[Sequence] ❌ Failed to flush events - invalid response")
             }
         } catch {
             // Re-queue events on failure
             eventQueue.insert(contentsOf: eventsToSend, at: 0)
-            print("[Sequence] Error flushing events: \(error)")
+            print("[Sequence] ❌ Error flushing events: \(error.localizedDescription)")
         }
     }
     
