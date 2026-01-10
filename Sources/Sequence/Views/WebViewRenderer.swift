@@ -107,7 +107,23 @@ public struct WebViewRenderer: UIViewRepresentable {
     }
 
     public func updateUIView(_ webView: WKWebView, context: Context) {
-        // Updates handled by coordinator
+        // Inject actual WebView dimensions into the page
+        // This ensures the web content can scale to the full WebView size
+        // including safe areas that might not be reported by window.innerWidth/Height
+        let bounds = webView.bounds
+        if bounds.width > 0 && bounds.height > 0 {
+            let script = """
+                window.sequenceViewport = {
+                    width: \(bounds.width),
+                    height: \(bounds.height)
+                };
+                // Dispatch event so FlowRenderer can use these dimensions
+                window.dispatchEvent(new CustomEvent('sequenceViewportReady', {
+                    detail: window.sequenceViewport
+                }));
+            """
+            webView.evaluateJavaScript(script, completionHandler: nil)
+        }
     }
 
     /// JavaScript bridge code injected into the WebView
