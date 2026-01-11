@@ -61,6 +61,25 @@ public struct WebViewRenderer: UIViewRepresentable {
         // Enable JavaScript
         config.defaultWebpagePreferences.allowsContentJavaScript = true
 
+        // Get the screen dimensions to inject early
+        // This provides accurate dimensions before the WebView is laid out
+        let screenBounds = UIScreen.main.bounds
+        let screenScale = UIScreen.main.scale
+
+        // Inject viewport dimensions at document START so they're available immediately
+        // This prevents the race condition where FlowRenderer calculates scale before we inject
+        let earlyViewportScript = """
+            window.sequenceViewport = {
+                width: \(screenBounds.width),
+                height: \(screenBounds.height),
+                scale: \(screenScale),
+                isEarlyEstimate: true
+            };
+            console.log('[Sequence] Early viewport injected:', window.sequenceViewport);
+        """
+        let earlyScript = WKUserScript(source: earlyViewportScript, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        contentController.addUserScript(earlyScript)
+
         // Disable zoom for consistent rendering and enable full-screen coverage
         let viewportScript = """
             var meta = document.createElement('meta');
@@ -91,6 +110,9 @@ public struct WebViewRenderer: UIViewRepresentable {
         #if DEBUG
         webView.configuration.websiteDataStore = .nonPersistent()
         #endif
+
+        // Store coordinator reference for later use
+        context.coordinator.webView = webView
 
         // Load the render URL
         let renderURL = "\(baseURL)/render/\(appId)"
@@ -193,8 +215,10 @@ public struct WebViewRenderer: UIViewRepresentable {
 
     public class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var parent: WebViewRenderer
+        weak var webView: WKWebView?
         private var backgroundObserver: NSObjectProtocol?
         private var foregroundObserver: NSObjectProtocol?
+        private var hasInjectedAccurateViewport = false
 
         init(_ parent: WebViewRenderer) {
             self.parent = parent
@@ -373,8 +397,51 @@ public struct WebViewRenderer: UIViewRepresentable {
 
         public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             print("[Sequence WebView] Finished loading")
+
+            // Inject accurate viewport dimensions now that the WebView is laid out
+            injectAccurateViewport(webView)
+
             DispatchQueue.main.async {
                 self.parent.isLoading = false
+            }
+        }
+
+        /// Injects the accurate WebView bounds into the page
+        /// This updates the early estimate with the actual dimensions
+        private func injectAccurateViewport(_ webView: WKWebView) {
+            let bounds = webView.bounds
+            guard bounds.width > 0 && bounds.height > 0 else {
+                print("[Sequence WebView] WebView bounds not ready, will retry")
+                // Retry after a short delay
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self, weak webView] in
+                    if let webView = webView {
+                        self?.injectAccurateViewport(webView)
+                    }
+                }
+                return
+            }
+
+            guard !hasInjectedAccurateViewport else { return }
+            hasInjectedAccurateViewport = true
+
+            let script = """
+                window.sequenceViewport = {
+                    width: \(bounds.width),
+                    height: \(bounds.height),
+                    isEarlyEstimate: false
+                };
+                console.log('[Sequence] Accurate viewport injected:', window.sequenceViewport);
+                // Dispatch event so FlowRenderer can recalculate scale with accurate dimensions
+                window.dispatchEvent(new CustomEvent('sequenceViewportReady', {
+                    detail: window.sequenceViewport
+                }));
+            """
+            webView.evaluateJavaScript(script) { _, error in
+                if let error = error {
+                    print("[Sequence WebView] Failed to inject accurate viewport: \(error)")
+                } else {
+                    print("[Sequence WebView] Accurate viewport injected: \(bounds.width)x\(bounds.height)")
+                }
             }
         }
 
