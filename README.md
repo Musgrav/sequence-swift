@@ -48,7 +48,7 @@ struct MyApp: App {
         Sequence.shared.configure(
             appId: "YOUR_APP_ID",
             apiKey: "YOUR_API_KEY",
-            baseURL: "https://your-sequence-instance.com" // Optional for self-hosted
+            baseURL: "https://screensequence.com" // Optional for self-hosted
         )
     }
     
