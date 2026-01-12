@@ -1,6 +1,6 @@
 # Sequence Swift SDK
 
-A native Swift SDK for integrating Sequence onboarding flows into your iOS apps.
+A native Swift SDK for integrating Sequence onboarding flows into your iOS apps with pixel-perfect WYSIWYG rendering.
 
 ## Requirements
 
@@ -19,15 +19,19 @@ Add Sequence to your project via SPM:
    ```
    https://github.com/Musgrav/sequence-swift
    ```
-3. Select your version rules and add to your target
+3. **IMPORTANT:** For the Dependency Rule, select **Branch** and type `main`
+   - Do NOT use a version number - always use branch `main` to get the latest fixes
+4. Click **Add Package** and add to your target
 
 Or add to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Musgrav/sequence-swift", from: "1.0.0")
+    .package(url: "https://github.com/Musgrav/sequence-swift", branch: "main")
 ]
 ```
+
+> ⚠️ **Important:** Always use `branch: "main"` instead of a version number to ensure you have the latest rendering fixes and features.
 
 ## Quick Start
 
@@ -58,7 +62,7 @@ struct MyApp: App {
 
 ### 2. Show Onboarding
 
-Use `OnboardingView` to display your onboarding flow:
+Use `WebViewOnboardingView` for pixel-perfect WYSIWYG rendering that matches exactly what you see in the editor:
 
 ```swift
 import SwiftUI
@@ -66,14 +70,14 @@ import Sequence
 
 struct ContentView: View {
     @StateObject private var sequence = Sequence.shared
-    
+
     var body: some View {
         Group {
             if sequence.isOnboardingCompleted {
                 // Your main app content
                 MainAppView()
             } else {
-                OnboardingView {
+                WebViewOnboardingView {
                     // Called when onboarding completes
                     print("Welcome to the app!")
                 }
@@ -82,6 +86,8 @@ struct ContentView: View {
     }
 }
 ```
+
+> ⚠️ **Important:** Always use `WebViewOnboardingView` (not `OnboardingView`). The WebView version renders your flows exactly as designed in the editor with proper scaling and styling.
 
 ### 3. Identify Users (Optional)
 
@@ -187,9 +193,26 @@ Sequence.shared.resetOnboarding()
 Sequence.shared.flush()
 ```
 
-### OnboardingView
+### WebViewOnboardingView (Recommended)
 
-SwiftUI view that renders the complete onboarding flow.
+SwiftUI view that renders your onboarding flow using a WebView for pixel-perfect WYSIWYG rendering. **This is the recommended view to use.**
+
+```swift
+WebViewOnboardingView(
+    onComplete: (() -> Void)? = nil,
+    onDataCollected: (([String: Any]) -> Void)? = nil
+)
+```
+
+**Why use WebViewOnboardingView:**
+- Pixel-perfect rendering that matches the web editor exactly
+- Proper scaling on all device sizes
+- Full support for all styling options (shadows, gradients, etc.)
+- Consistent behavior across iOS versions
+
+### OnboardingView (Legacy)
+
+Native SwiftUI view that renders an approximation of your onboarding flow. **Not recommended for production use** as it may not match the editor exactly.
 
 ```swift
 OnboardingView(
@@ -197,6 +220,8 @@ OnboardingView(
     onNativeScreen: ((Screen) -> AnyView)?
 )
 ```
+
+> ⚠️ **Warning:** `OnboardingView` uses native SwiftUI components which may not render identically to what you see in the editor. Always use `WebViewOnboardingView` for production apps.
 
 ## Models
 
@@ -236,7 +261,7 @@ do {
 
 ## Support
 
-- Documentation: [https://docs.sequence.so](https://docs.sequence.so)
+- Documentation: (https://www.screensequence.com/docs#mg-step-by-step)
 - Issues: [GitHub Issues](https://github.com/Musgrav/sequence-swift/issues)
 
 ## License
