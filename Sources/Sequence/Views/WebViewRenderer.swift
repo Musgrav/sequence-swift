@@ -106,6 +106,10 @@ public struct WebViewRenderer: UIViewRepresentable {
         webView.backgroundColor = UIColor.clear
         webView.scrollView.backgroundColor = UIColor.clear
 
+        // CRITICAL: Prevent scroll view from adding safe area insets
+        // This allows web content to extend into safe areas (edge-to-edge)
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+
         // Disable caching for development
         #if DEBUG
         webView.configuration.websiteDataStore = .nonPersistent()
