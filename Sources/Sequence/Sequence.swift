@@ -4,6 +4,79 @@
 import Foundation
 import SwiftUI
 import Combine
+import AuthenticationServices
+
+// MARK: - Auth Credentials
+
+/// Credential received from Sign In with Apple
+public struct AppleAuthCredential {
+    public let userIdentifier: String
+    public let identityToken: Data?
+    public let authorizationCode: Data?
+    public let email: String?
+    public let fullName: PersonNameComponents?
+
+    public var identityTokenString: String? {
+        identityToken.flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    public var authorizationCodeString: String? {
+        authorizationCode.flatMap { String(data: $0, encoding: .utf8) }
+    }
+}
+
+/// Credential received from Sign In with Google
+public struct GoogleAuthCredential {
+    public let idToken: String
+    public let accessToken: String?
+    public let email: String?
+    public let displayName: String?
+}
+
+/// Result of a permission request
+public enum PermissionResult {
+    case granted
+    case denied
+    case notDetermined
+}
+
+// MARK: - Sequence Delegate Protocol
+
+/// Delegate protocol for handling auth and custom actions
+/// Implement this in your app to receive auth credentials
+@MainActor
+public protocol SequenceDelegate: AnyObject {
+    /// Called when Sign In with Apple completes successfully
+    /// Your app should send the credential to your backend for verification
+    func sequence(_ sequence: Sequence, didCompleteAppleSignIn credential: AppleAuthCredential)
+
+    /// Called when Sign In with Apple fails
+    func sequence(_ sequence: Sequence, didFailAppleSignIn error: Error)
+
+    /// Called when Sign In with Google completes successfully (requires GoogleSignIn SDK integration)
+    func sequence(_ sequence: Sequence, didCompleteGoogleSignIn credential: GoogleAuthCredential)
+
+    /// Called when Sign In with Google fails
+    func sequence(_ sequence: Sequence, didFailGoogleSignIn error: Error)
+
+    /// Called when email sign in is requested
+    /// Your app should present an email sign in flow
+    func sequenceDidRequestEmailSignIn(_ sequence: Sequence)
+
+    /// Called for custom action identifiers not handled by the SDK
+    /// Return true if you handled the action, false otherwise
+    func sequence(_ sequence: Sequence, didReceiveCustomAction identifier: String, awaitingResult: Bool) -> Bool
+}
+
+// Default implementations make all methods optional
+public extension SequenceDelegate {
+    func sequence(_ sequence: Sequence, didCompleteAppleSignIn credential: AppleAuthCredential) {}
+    func sequence(_ sequence: Sequence, didFailAppleSignIn error: Error) {}
+    func sequence(_ sequence: Sequence, didCompleteGoogleSignIn credential: GoogleAuthCredential) {}
+    func sequence(_ sequence: Sequence, didFailGoogleSignIn error: Error) {}
+    func sequenceDidRequestEmailSignIn(_ sequence: Sequence) {}
+    func sequence(_ sequence: Sequence, didReceiveCustomAction identifier: String, awaitingResult: Bool) -> Bool { return false }
+}
 
 /// Main entry point for Sequence SDK
 /// Initialize once in your app (e.g., in AppDelegate or @main App)
@@ -11,10 +84,18 @@ import Combine
 public final class Sequence: ObservableObject {
     
     // MARK: - Singleton
-    
+
     /// Shared instance of Sequence
     public static let shared = Sequence()
-    
+
+    // MARK: - Delegate
+
+    /// Delegate for receiving auth callbacks and custom action events
+    public weak var delegate: SequenceDelegate?
+
+    /// Internal callback for WebView to send results back
+    internal var webViewResultCallback: ((NativeActionResult) -> Void)?
+
     // MARK: - Published Properties
     
     /// Current onboarding configuration fetched from server
@@ -518,6 +599,57 @@ public final class Sequence: ObservableObject {
     
     deinit {
         flushTimer?.invalidate()
+    }
+
+    // MARK: - Native Action Result Callbacks
+
+    /// Send a success result back to the WebView
+    /// Call this after successfully handling an auth or permission request
+    public func sendSuccessResult(data: [String: Any]? = nil) {
+        let result = NativeActionResult.success(data: data)
+        webViewResultCallback?(result)
+    }
+
+    /// Send a failure result back to the WebView
+    /// Call this when an auth or permission request fails
+    public func sendFailureResult(error: String? = nil) {
+        let result = NativeActionResult.failure(error: error)
+        webViewResultCallback?(result)
+    }
+
+    /// Send a cancelled result back to the WebView
+    /// Call this when the user cancels an auth or permission request
+    public func sendCancelledResult() {
+        let result = NativeActionResult.cancelled
+        webViewResultCallback?(result)
+    }
+}
+
+// MARK: - Native Action Result
+
+/// Result type sent back to WebView for bidirectional communication
+public enum NativeActionResult {
+    case success(data: [String: Any]?)
+    case failure(error: String?)
+    case cancelled
+
+    var jsonString: String {
+        switch self {
+        case .success(let data):
+            if let data = data,
+               let jsonData = try? JSONSerialization.data(withJSONObject: data),
+               let dataString = String(data: jsonData, encoding: .utf8) {
+                return "{ \"status\": \"success\", \"data\": \(dataString) }"
+            }
+            return "{ \"status\": \"success\" }"
+        case .failure(let error):
+            if let error = error {
+                return "{ \"status\": \"failure\", \"error\": \"\(error.replacingOccurrences(of: "\"", with: "\\\""))\" }"
+            }
+            return "{ \"status\": \"failure\" }"
+        case .cancelled:
+            return "{ \"status\": \"cancelled\" }"
+        }
     }
 }
 

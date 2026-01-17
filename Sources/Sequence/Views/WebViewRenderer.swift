@@ -5,6 +5,13 @@
 import SwiftUI
 import WebKit
 import UIKit
+import AuthenticationServices
+import UserNotifications
+import CoreLocation
+import AVFoundation
+import Photos
+import AppTrackingTransparency
+import StoreKit
 
 /// Messages sent from JavaScript to Swift
 enum WebViewMessage: String {
@@ -53,9 +60,11 @@ public struct WebViewRenderer: UIViewRepresentable {
         // Configure WebView for optimal rendering
         let config = WKWebViewConfiguration()
 
-        // Set up JavaScript message handler
+        // Set up JavaScript message handlers
+        // Register both handler names for compatibility with FlowRenderer
         let contentController = WKUserContentController()
-        contentController.add(context.coordinator, name: "sequenceHandler")
+        contentController.add(context.coordinator, name: "sequence")        // Primary handler
+        contentController.add(context.coordinator, name: "sequenceHandler") // Fallback handler
         config.userContentController = contentController
 
         // Enable JavaScript
@@ -217,21 +226,53 @@ public struct WebViewRenderer: UIViewRepresentable {
 
     // MARK: - Coordinator
 
-    public class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+    public class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding, CLLocationManagerDelegate {
         var parent: WebViewRenderer
         weak var webView: WKWebView?
         private var backgroundObserver: NSObjectProtocol?
         private var foregroundObserver: NSObjectProtocol?
         private var hasInjectedAccurateViewport = false
 
+        // Location manager for permission requests
+        private lazy var locationManager: CLLocationManager = {
+            let manager = CLLocationManager()
+            manager.delegate = self
+            return manager
+        }()
+        private var locationPermissionCompletion: ((PermissionResult) -> Void)?
+
         init(_ parent: WebViewRenderer) {
             self.parent = parent
             super.init()
             setupLifecycleObservers()
+            setupResultCallback()
         }
 
         deinit {
             removeLifecycleObservers()
+        }
+
+        // MARK: - Result Callback Setup
+
+        private func setupResultCallback() {
+            // Set up callback so Sequence.shared can send results back to WebView
+            Sequence.shared.webViewResultCallback = { [weak self] result in
+                self?.sendResultToWebView(result)
+            }
+        }
+
+        /// Send a result back to the WebView via window.sequenceNativeCallback
+        private func sendResultToWebView(_ result: NativeActionResult) {
+            let script = "window.sequenceNativeCallback && window.sequenceNativeCallback(\(result.jsonString));"
+            DispatchQueue.main.async { [weak self] in
+                self?.webView?.evaluateJavaScript(script) { _, error in
+                    if let error = error {
+                        print("[Sequence WebView] Failed to send result to WebView: \(error)")
+                    } else {
+                        print("[Sequence WebView] Sent result to WebView: \(result.jsonString)")
+                    }
+                }
+            }
         }
 
         // MARK: - App Lifecycle Observers (for drop-off detection)
@@ -385,8 +426,373 @@ public struct WebViewRenderer: UIViewRepresentable {
                 // Navigation handled by web renderer
                 break
 
+            case "custom":
+                handleCustomAction(action)
+
             default:
                 break
+            }
+        }
+
+        // MARK: - Custom Action Handling
+
+        private func handleCustomAction(_ action: [String: Any]) {
+            guard let identifier = action["identifier"] as? String else {
+                print("[Sequence WebView] Custom action missing identifier")
+                return
+            }
+
+            let awaitResult = action["awaitResult"] as? Bool ?? false
+            print("[Sequence WebView] Handling custom action: \(identifier), awaitResult: \(awaitResult)")
+
+            // Handle well-known identifiers
+            switch identifier {
+            // Authentication
+            case "auth.apple":
+                handleAppleSignIn()
+
+            case "auth.google":
+                handleGoogleSignIn()
+
+            case "auth.email":
+                handleEmailSignIn()
+
+            // Permissions
+            case "permission.notifications":
+                handleNotificationPermission()
+
+            case "permission.location":
+                handleLocationPermission(always: false)
+
+            case "permission.locationAlways":
+                handleLocationPermission(always: true)
+
+            case "permission.camera":
+                handleCameraPermission()
+
+            case "permission.photos":
+                handlePhotosPermission()
+
+            case "permission.tracking":
+                handleTrackingPermission()
+
+            // System
+            case "system.review":
+                handleAppReview()
+
+            case "system.openSettings":
+                handleOpenSettings()
+
+            default:
+                // Pass to delegate for custom handling
+                let handled = Sequence.shared.delegate?.sequence(Sequence.shared, didReceiveCustomAction: identifier, awaitingResult: awaitResult) ?? false
+                if !handled {
+                    print("[Sequence WebView] Unhandled custom action: \(identifier)")
+                    // If awaiting result but not handled, send failure
+                    if awaitResult {
+                        sendResultToWebView(.failure(error: "Unhandled action: \(identifier)"))
+                    }
+                }
+            }
+        }
+
+        // MARK: - Sign In with Apple
+
+        private func handleAppleSignIn() {
+            print("[Sequence WebView] Starting Sign In with Apple")
+
+            let request = ASAuthorizationAppleIDProvider().createRequest()
+            request.requestedScopes = [.fullName, .email]
+
+            let controller = ASAuthorizationController(authorizationRequests: [request])
+            controller.delegate = self
+            controller.presentationContextProvider = self
+            controller.performRequests()
+        }
+
+        public func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+            guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                  let window = windowScene.windows.first else {
+                return UIWindow()
+            }
+            return window
+        }
+
+        public func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
+            guard let appleIDCredential = authorization.credential as? ASAuthorizationAppleIDCredential else {
+                sendResultToWebView(.failure(error: "Invalid credential type"))
+                return
+            }
+
+            let credential = AppleAuthCredential(
+                userIdentifier: appleIDCredential.user,
+                identityToken: appleIDCredential.identityToken,
+                authorizationCode: appleIDCredential.authorizationCode,
+                email: appleIDCredential.email,
+                fullName: appleIDCredential.fullName
+            )
+
+            print("[Sequence WebView] Apple Sign In succeeded for user: \(credential.userIdentifier)")
+
+            // Notify delegate
+            Task { @MainActor in
+                Sequence.shared.delegate?.sequence(Sequence.shared, didCompleteAppleSignIn: credential)
+            }
+
+            // Send success result to WebView
+            sendResultToWebView(.success(data: [
+                "userIdentifier": credential.userIdentifier,
+                "email": credential.email as Any,
+                "givenName": credential.fullName?.givenName as Any,
+                "familyName": credential.fullName?.familyName as Any
+            ]))
+        }
+
+        public func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
+            print("[Sequence WebView] Apple Sign In failed: \(error.localizedDescription)")
+
+            // Notify delegate
+            Task { @MainActor in
+                Sequence.shared.delegate?.sequence(Sequence.shared, didFailAppleSignIn: error)
+            }
+
+            // Check if user cancelled
+            if let authError = error as? ASAuthorizationError, authError.code == .canceled {
+                sendResultToWebView(.cancelled)
+            } else {
+                sendResultToWebView(.failure(error: error.localizedDescription))
+            }
+        }
+
+        // MARK: - Sign In with Google
+
+        private func handleGoogleSignIn() {
+            print("[Sequence WebView] Google Sign In requested - delegate must handle")
+            // Google Sign In requires the GoogleSignIn SDK which the host app must integrate
+            // We notify the delegate and expect them to handle it
+            let handled = Sequence.shared.delegate?.sequence(Sequence.shared, didReceiveCustomAction: "auth.google", awaitingResult: true) ?? false
+            if !handled {
+                sendResultToWebView(.failure(error: "Google Sign In not configured. Please implement SequenceDelegate."))
+            }
+        }
+
+        // MARK: - Email Sign In
+
+        private func handleEmailSignIn() {
+            print("[Sequence WebView] Email Sign In requested - delegate must handle")
+            Task { @MainActor in
+                Sequence.shared.delegate?.sequenceDidRequestEmailSignIn(Sequence.shared)
+            }
+            // Don't send result - delegate should call sendSuccessResult/sendFailureResult
+        }
+
+        // MARK: - Notification Permission
+
+        private func handleNotificationPermission() {
+            print("[Sequence WebView] Requesting notification permission")
+
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { [weak self] granted, error in
+                DispatchQueue.main.async {
+                    if let error = error {
+                        print("[Sequence WebView] Notification permission error: \(error)")
+                        self?.sendResultToWebView(.failure(error: error.localizedDescription))
+                    } else if granted {
+                        print("[Sequence WebView] Notification permission granted")
+                        // Register for remote notifications
+                        UIApplication.shared.registerForRemoteNotifications()
+                        self?.sendResultToWebView(.success(data: ["granted": true]))
+                    } else {
+                        print("[Sequence WebView] Notification permission denied")
+                        self?.sendResultToWebView(.success(data: ["granted": false]))
+                    }
+                }
+            }
+        }
+
+        // MARK: - Location Permission
+
+        private func handleLocationPermission(always: Bool) {
+            print("[Sequence WebView] Requesting location permission (always: \(always))")
+
+            let status = locationManager.authorizationStatus
+
+            switch status {
+            case .notDetermined:
+                // Store completion handler and request permission
+                locationPermissionCompletion = { [weak self] result in
+                    switch result {
+                    case .granted:
+                        self?.sendResultToWebView(.success(data: ["granted": true]))
+                    case .denied:
+                        self?.sendResultToWebView(.success(data: ["granted": false]))
+                    case .notDetermined:
+                        self?.sendResultToWebView(.success(data: ["granted": false]))
+                    }
+                }
+
+                if always {
+                    locationManager.requestAlwaysAuthorization()
+                } else {
+                    locationManager.requestWhenInUseAuthorization()
+                }
+
+            case .authorizedWhenInUse:
+                if always {
+                    // Need to upgrade to always
+                    locationPermissionCompletion = { [weak self] result in
+                        switch result {
+                        case .granted:
+                            self?.sendResultToWebView(.success(data: ["granted": true]))
+                        case .denied, .notDetermined:
+                            self?.sendResultToWebView(.success(data: ["granted": false]))
+                        }
+                    }
+                    locationManager.requestAlwaysAuthorization()
+                } else {
+                    sendResultToWebView(.success(data: ["granted": true]))
+                }
+
+            case .authorizedAlways:
+                sendResultToWebView(.success(data: ["granted": true]))
+
+            case .denied, .restricted:
+                sendResultToWebView(.success(data: ["granted": false]))
+
+            @unknown default:
+                sendResultToWebView(.failure(error: "Unknown authorization status"))
+            }
+        }
+
+        public func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+            let status = manager.authorizationStatus
+
+            let result: PermissionResult
+            switch status {
+            case .authorizedAlways, .authorizedWhenInUse:
+                result = .granted
+            case .denied, .restricted:
+                result = .denied
+            case .notDetermined:
+                result = .notDetermined
+            @unknown default:
+                result = .denied
+            }
+
+            locationPermissionCompletion?(result)
+            locationPermissionCompletion = nil
+        }
+
+        // MARK: - Camera Permission
+
+        private func handleCameraPermission() {
+            print("[Sequence WebView] Requesting camera permission")
+
+            let status = AVCaptureDevice.authorizationStatus(for: .video)
+
+            switch status {
+            case .notDetermined:
+                AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                    DispatchQueue.main.async {
+                        self?.sendResultToWebView(.success(data: ["granted": granted]))
+                    }
+                }
+            case .authorized:
+                sendResultToWebView(.success(data: ["granted": true]))
+            case .denied, .restricted:
+                sendResultToWebView(.success(data: ["granted": false]))
+            @unknown default:
+                sendResultToWebView(.failure(error: "Unknown authorization status"))
+            }
+        }
+
+        // MARK: - Photos Permission
+
+        private func handlePhotosPermission() {
+            print("[Sequence WebView] Requesting photos permission")
+
+            let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+
+            switch status {
+            case .notDetermined:
+                PHPhotoLibrary.requestAuthorization(for: .readWrite) { [weak self] newStatus in
+                    DispatchQueue.main.async {
+                        let granted = newStatus == .authorized || newStatus == .limited
+                        self?.sendResultToWebView(.success(data: ["granted": granted, "limited": newStatus == .limited]))
+                    }
+                }
+            case .authorized:
+                sendResultToWebView(.success(data: ["granted": true, "limited": false]))
+            case .limited:
+                sendResultToWebView(.success(data: ["granted": true, "limited": true]))
+            case .denied, .restricted:
+                sendResultToWebView(.success(data: ["granted": false]))
+            @unknown default:
+                sendResultToWebView(.failure(error: "Unknown authorization status"))
+            }
+        }
+
+        // MARK: - App Tracking Transparency
+
+        private func handleTrackingPermission() {
+            print("[Sequence WebView] Requesting tracking permission")
+
+            if #available(iOS 14, *) {
+                let status = ATTrackingManager.trackingAuthorizationStatus
+
+                switch status {
+                case .notDetermined:
+                    ATTrackingManager.requestTrackingAuthorization { [weak self] newStatus in
+                        DispatchQueue.main.async {
+                            let granted = newStatus == .authorized
+                            self?.sendResultToWebView(.success(data: ["granted": granted]))
+                        }
+                    }
+                case .authorized:
+                    sendResultToWebView(.success(data: ["granted": true]))
+                case .denied, .restricted:
+                    sendResultToWebView(.success(data: ["granted": false]))
+                @unknown default:
+                    sendResultToWebView(.failure(error: "Unknown authorization status"))
+                }
+            } else {
+                // Pre-iOS 14, tracking was always allowed
+                sendResultToWebView(.success(data: ["granted": true]))
+            }
+        }
+
+        // MARK: - App Review
+
+        private func handleAppReview() {
+            print("[Sequence WebView] Requesting app review")
+
+            DispatchQueue.main.async { [weak self] in
+                if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+                    SKStoreReviewController.requestReview(in: windowScene)
+                    // StoreKit doesn't give us a callback, so we just send success
+                    self?.sendResultToWebView(.success(data: nil))
+                } else {
+                    self?.sendResultToWebView(.failure(error: "No window scene available"))
+                }
+            }
+        }
+
+        // MARK: - Open Settings
+
+        private func handleOpenSettings() {
+            print("[Sequence WebView] Opening app settings")
+
+            DispatchQueue.main.async { [weak self] in
+                if let settingsURL = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(settingsURL) { success in
+                        if success {
+                            self?.sendResultToWebView(.success(data: nil))
+                        } else {
+                            self?.sendResultToWebView(.failure(error: "Failed to open settings"))
+                        }
+                    }
+                } else {
+                    self?.sendResultToWebView(.failure(error: "Settings URL not available"))
+                }
             }
         }
 
