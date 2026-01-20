@@ -8,12 +8,28 @@ import AuthenticationServices
 
 // MARK: - Auth Credentials
 
-/// Credential received from Sign In with Apple
+/// Credential received from Sign In with Apple.
+///
+/// This is passed to `sequence(_:didCompleteAppleSignIn:)` after successful Apple Sign-In.
+/// The SDK handles verification automatically - you don't need to do anything with this
+/// unless you want to store the user info locally.
+///
+/// - Important: `email` and `fullName` are only provided on the user's FIRST sign-in.
+///   Apple does not send this info on subsequent sign-ins, so store it if needed.
 public struct AppleAuthCredential {
+    /// Stable user identifier. Always available and consistent across sign-ins.
     public let userIdentifier: String
+
+    /// Identity token for backend verification. Used by SDK automatically.
     public let identityToken: Data?
+
+    /// Authorization code for backend use.
     public let authorizationCode: Data?
+
+    /// User's email. Only provided on FIRST sign-in.
     public let email: String?
+
+    /// User's full name. Only provided on FIRST sign-in.
     public let fullName: PersonNameComponents?
 
     public var identityTokenString: String? {
@@ -25,12 +41,39 @@ public struct AppleAuthCredential {
     }
 }
 
-/// Credential received from Sign In with Google
+/// Credential for Google Sign-In.
+///
+/// Create this from the GoogleSignIn SDK result and pass to `completeGoogleSignIn(credential:)`.
+///
+/// Example:
+/// ```swift
+/// let credential = GoogleAuthCredential(
+///     idToken: user.idToken!.tokenString,
+///     accessToken: user.accessToken.tokenString,
+///     email: user.profile?.email,
+///     displayName: user.profile?.name
+/// )
+/// await Sequence.shared.completeGoogleSignIn(credential: credential)
+/// ```
 public struct GoogleAuthCredential {
+    /// Google ID token (JWT). Required for backend verification.
     public let idToken: String
+
+    /// Access token for Google APIs. Optional.
     public let accessToken: String?
+
+    /// User's email address.
     public let email: String?
+
+    /// User's display name.
     public let displayName: String?
+
+    public init(idToken: String, accessToken: String? = nil, email: String? = nil, displayName: String? = nil) {
+        self.idToken = idToken
+        self.accessToken = accessToken
+        self.email = email
+        self.displayName = displayName
+    }
 }
 
 /// Result of a permission request
@@ -42,29 +85,131 @@ public enum PermissionResult {
 
 // MARK: - Sequence Delegate Protocol
 
-/// Delegate protocol for handling auth and custom actions
-/// Implement this in your app to receive auth credentials
+/// Delegate protocol for handling authentication and custom actions in onboarding flows.
+///
+/// **Important:** If your onboarding flow includes any sign-in buttons (Apple, Google, or Email),
+/// you MUST implement this protocol. This is a prerequisite for apps using authentication.
+///
+/// ## Authentication Overview
+///
+/// | Provider | SDK Behavior | Your Responsibility |
+/// |----------|--------------|---------------------|
+/// | Apple | Fully automatic | None - just set delegate for optional callbacks |
+/// | Google | Delegates to app | Implement `didReceiveCustomAction` for "auth.google" |
+/// | Email | Delegates to app | Implement `sequenceDidRequestEmailSignIn` |
+///
+/// ## Quick Setup
+///
+/// ```swift
+/// // 1. Create handler class
+/// class AuthHandler: SequenceDelegate {
+///     static let shared = AuthHandler()
+///     // Implement methods...
+/// }
+///
+/// // 2. Set delegate during app init
+/// Sequence.shared.delegate = AuthHandler.shared
+/// ```
+///
+/// See README.md for complete implementation examples.
 @MainActor
 public protocol SequenceDelegate: AnyObject {
-    /// Called when Sign In with Apple completes successfully
-    /// Your app should send the credential to your backend for verification
+
+    // MARK: - Apple Sign-In (Automatic)
+
+    /// Called when Sign In with Apple completes successfully.
+    ///
+    /// **Note:** Apple Sign-In is fully handled by the SDK. This callback is informational only.
+    /// The SDK automatically verifies the credential with your backend and routes the flow.
+    ///
+    /// - Important: `email` and `fullName` are only provided on the user's FIRST sign-in.
+    ///   Store these values if needed, as subsequent sign-ins won't include them.
+    ///
+    /// - Parameters:
+    ///   - sequence: The Sequence instance
+    ///   - credential: The Apple auth credential containing user info
     func sequence(_ sequence: Sequence, didCompleteAppleSignIn credential: AppleAuthCredential)
 
-    /// Called when Sign In with Apple fails
+    /// Called when Sign In with Apple fails.
     func sequence(_ sequence: Sequence, didFailAppleSignIn error: Error)
 
-    /// Called when Sign In with Google completes successfully (requires GoogleSignIn SDK integration)
+    // MARK: - Google Sign-In (Manual)
+
+    /// Called after Google Sign-In completes (for your tracking purposes).
+    ///
+    /// **Note:** You must handle the actual Google Sign-In flow yourself via `didReceiveCustomAction`.
+    /// This callback is called after you call `completeGoogleSignIn(credential:)`.
     func sequence(_ sequence: Sequence, didCompleteGoogleSignIn credential: GoogleAuthCredential)
 
-    /// Called when Sign In with Google fails
+    /// Called when Google Sign-In fails.
     func sequence(_ sequence: Sequence, didFailGoogleSignIn error: Error)
 
-    /// Called when email sign in is requested
-    /// Your app should present an email sign in flow
+    // MARK: - Email Sign-In (Manual)
+
+    /// Called when email sign-in is requested from the onboarding flow.
+    ///
+    /// **You must implement this** if your onboarding includes email sign-in buttons.
+    ///
+    /// Your implementation should:
+    /// 1. Present your email authentication UI (password, magic link, OTP, etc.)
+    /// 2. After successful auth, call `Sequence.shared.verifyEmailAuth(email:givenName:familyName:)`
+    /// 3. Then call `Sequence.shared.sendSuccessResult(data: ["isNewUser": result.isNewUser, ...])`
+    /// 4. On failure, call `Sequence.shared.sendFailureResult(error:)`
+    /// 5. On cancel, call `Sequence.shared.sendCancelledResult()`
+    ///
+    /// Example:
+    /// ```swift
+    /// func sequenceDidRequestEmailSignIn(_ sequence: Sequence) {
+    ///     let emailVC = MyEmailAuthViewController()
+    ///     emailVC.onSuccess = { email, firstName, lastName in
+    ///         Task {
+    ///             let result = try await Sequence.shared.verifyEmailAuth(
+    ///                 email: email, givenName: firstName, familyName: lastName
+    ///             )
+    ///             Sequence.shared.sendSuccessResult(data: ["email": email, "isNewUser": result.isNewUser])
+    ///         }
+    ///     }
+    ///     present(emailVC, animated: true)
+    /// }
+    /// ```
     func sequenceDidRequestEmailSignIn(_ sequence: Sequence)
 
-    /// Called for custom action identifiers not handled by the SDK
-    /// Return true if you handled the action, false otherwise
+    // MARK: - Custom Actions
+
+    /// Called for custom action identifiers, including Google Sign-In ("auth.google").
+    ///
+    /// **You must implement this** for Google Sign-In and any custom actions in your flow.
+    ///
+    /// For Google Sign-In (`identifier == "auth.google"`):
+    /// 1. Present Google Sign-In using the GoogleSignIn SDK
+    /// 2. On success, call `Sequence.shared.completeGoogleSignIn(credential:)`
+    /// 3. On failure, call `Sequence.shared.sendFailureResult(error:)`
+    /// 4. On cancel, call `Sequence.shared.sendCancelledResult()`
+    /// 5. Return `true` to indicate you're handling this action
+    ///
+    /// Example:
+    /// ```swift
+    /// func sequence(_ sequence: Sequence, didReceiveCustomAction identifier: String, awaitingResult: Bool) -> Bool {
+    ///     if identifier == "auth.google" {
+    ///         GIDSignIn.sharedInstance.signIn(withPresenting: rootVC) { result, error in
+    ///             guard let user = result?.user, let idToken = user.idToken?.tokenString else {
+    ///                 Sequence.shared.sendFailureResult(error: "Failed")
+    ///                 return
+    ///             }
+    ///             let credential = GoogleAuthCredential(idToken: idToken, ...)
+    ///             Task { await Sequence.shared.completeGoogleSignIn(credential: credential) }
+    ///         }
+    ///         return true
+    ///     }
+    ///     return false
+    /// }
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - sequence: The Sequence instance
+    ///   - identifier: The action identifier (e.g., "auth.google", "myapp.subscribe")
+    ///   - awaitingResult: If true, you must call sendSuccessResult/sendFailureResult/sendCancelledResult
+    /// - Returns: `true` if you handled the action, `false` otherwise
     func sequence(_ sequence: Sequence, didReceiveCustomAction identifier: String, awaitingResult: Bool) -> Bool
 }
 
@@ -622,6 +767,223 @@ public final class Sequence: ObservableObject {
     public func sendCancelledResult() {
         let result = NativeActionResult.cancelled
         webViewResultCallback?(result)
+    }
+
+    // MARK: - Auth Backend Verification
+
+    /// Result from backend auth verification
+    public struct AuthVerifyResult {
+        public let isNewUser: Bool
+        public let userId: String?
+    }
+
+    /// Legacy type alias for backward compatibility
+    public typealias AppleAuthVerifyResult = AuthVerifyResult
+
+    /// Verify Apple auth credential with the backend
+    /// This checks if the user is new or returning and creates/updates the user record
+    /// - Parameter credential: The Apple auth credential to verify
+    /// - Returns: Result containing isNewUser flag
+    public func verifyAppleAuth(credential: AppleAuthCredential) async throws -> AppleAuthVerifyResult {
+        guard let apiKey = apiKey else {
+            throw SequenceError.notConfigured
+        }
+
+        let url = URL(string: "\(baseURL)/api/v1/auth/apple")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        // Build request body
+        var body: [String: Any] = [
+            "user_identifier": credential.userIdentifier
+        ]
+
+        if let identityToken = credential.identityTokenString {
+            body["identity_token"] = identityToken
+        }
+
+        if let email = credential.email {
+            body["email"] = email
+        }
+
+        if let givenName = credential.fullName?.givenName {
+            body["given_name"] = givenName
+        }
+
+        if let familyName = credential.fullName?.familyName {
+            body["family_name"] = familyName
+        }
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        print("[Sequence] Verifying Apple auth with backend...")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SequenceError.networkError("Invalid response")
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            let responseBody = String(data: data, encoding: .utf8) ?? "no body"
+            print("[Sequence] Apple auth verification failed: HTTP \(httpResponse.statusCode) - \(responseBody)")
+            throw SequenceError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+
+        // Parse response
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw SequenceError.decodingError("Invalid JSON response")
+        }
+
+        let isNewUser = json["is_new_user"] as? Bool ?? true
+        let userId = json["user_id"] as? String
+
+        print("[Sequence] Apple auth verified - isNewUser: \(isNewUser)")
+
+        return AuthVerifyResult(isNewUser: isNewUser, userId: userId)
+    }
+
+    // MARK: - Google Auth Backend Verification
+
+    /// Verify Google auth credential with the backend
+    /// This checks if the user is new or returning and creates/updates the user record
+    /// - Parameter credential: The Google auth credential to verify
+    /// - Returns: Result containing isNewUser flag
+    public func verifyGoogleAuth(credential: GoogleAuthCredential) async throws -> AuthVerifyResult {
+        guard let apiKey = apiKey else {
+            throw SequenceError.notConfigured
+        }
+
+        let url = URL(string: "\(baseURL)/api/v1/auth/google")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        // Build request body
+        var body: [String: Any] = [
+            "id_token": credential.idToken
+        ]
+
+        if let email = credential.email {
+            body["email"] = email
+        }
+
+        // Parse display name into given/family name if available
+        if let displayName = credential.displayName {
+            let nameParts = displayName.split(separator: " ", maxSplits: 1)
+            if nameParts.count > 0 {
+                body["given_name"] = String(nameParts[0])
+            }
+            if nameParts.count > 1 {
+                body["family_name"] = String(nameParts[1])
+            }
+        }
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        print("[Sequence] Verifying Google auth with backend...")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SequenceError.networkError("Invalid response")
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            let responseBody = String(data: data, encoding: .utf8) ?? "no body"
+            print("[Sequence] Google auth verification failed: HTTP \(httpResponse.statusCode) - \(responseBody)")
+            throw SequenceError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+
+        // Parse response
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw SequenceError.decodingError("Invalid JSON response")
+        }
+
+        let isNewUser = json["is_new_user"] as? Bool ?? true
+        let userId = json["user_id"] as? String
+
+        print("[Sequence] Google auth verified - isNewUser: \(isNewUser)")
+
+        return AuthVerifyResult(isNewUser: isNewUser, userId: userId)
+    }
+
+    /// Complete Google sign-in flow after app handles Google SDK authentication
+    /// This verifies with the backend and sends the result to the WebView
+    /// - Parameter credential: The Google auth credential
+    public func completeGoogleSignIn(credential: GoogleAuthCredential) async {
+        do {
+            let result = try await verifyGoogleAuth(credential: credential)
+            sendSuccessResult(data: ["isNewUser": result.isNewUser, "userId": result.userId as Any])
+        } catch {
+            print("[Sequence] Google sign-in completion failed: \(error)")
+            sendFailureResult(error: error.localizedDescription)
+        }
+    }
+
+    // MARK: - Email Auth Backend Verification
+
+    /// Verify email auth with the backend
+    /// Call this after your app has verified the user's email (via password, magic link, OTP, etc.)
+    /// - Parameters:
+    ///   - email: The verified email address
+    ///   - givenName: Optional first name
+    ///   - familyName: Optional last name
+    /// - Returns: Result containing isNewUser flag
+    public func verifyEmailAuth(email: String, givenName: String? = nil, familyName: String? = nil) async throws -> AuthVerifyResult {
+        guard let apiKey = apiKey else {
+            throw SequenceError.notConfigured
+        }
+
+        let url = URL(string: "\(baseURL)/api/v1/auth/email")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        // Build request body
+        var body: [String: Any] = [
+            "email": email
+        ]
+
+        if let givenName = givenName {
+            body["given_name"] = givenName
+        }
+
+        if let familyName = familyName {
+            body["family_name"] = familyName
+        }
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        print("[Sequence] Verifying email auth with backend...")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SequenceError.networkError("Invalid response")
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            let responseBody = String(data: data, encoding: .utf8) ?? "no body"
+            print("[Sequence] Email auth verification failed: HTTP \(httpResponse.statusCode) - \(responseBody)")
+            throw SequenceError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+
+        // Parse response
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw SequenceError.decodingError("Invalid JSON response")
+        }
+
+        let isNewUser = json["is_new_user"] as? Bool ?? true
+        let userId = json["user_id"] as? String
+
+        print("[Sequence] Email auth verified - isNewUser: \(isNewUser)")
+
+        return AuthVerifyResult(isNewUser: isNewUser, userId: userId)
     }
 }
 
